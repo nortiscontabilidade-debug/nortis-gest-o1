@@ -387,25 +387,6 @@ function renderLoginScreen(err = "") {
           </div>
           <button type="submit" class="btn pr">Entrar no Sistema</button>
         </form>
-
-        <div class="quick-users">
-          <p>Demonstração dos Níveis de Acesso:</p>
-          <button type="button" class="quick-user-btn" onclick="quickFill('${MASTER_EMAIL}','Nortis@2026Master')">
-            <span><b>Sérgio</b> (Administrador Master)</span>
-            <span class="p ok s">Acesso Total</span>
-          </button>
-          <button type="button" class="quick-user-btn" onclick="quickFill('rafael.moura@nortiscontabilidade.com.br','admin123')">
-            <span><b>Rafael Moura</b> (Administrador)</span>
-            <span class="p wn s">Gerenciamento</span>
-          </button>
-          <button type="button" class="quick-user-btn" onclick="quickFill('camila.ribeiro@nortiscontabilidade.com.br','collab123')">
-            <span><b>Camila Ribeiro</b> (Colaboradora)</span>
-            <span class="p mu s">Acesso Restrito</span>
-          </button>
-          <div style="font-size:11px;color:var(--mu);margin-top:12px;line-height:1.4">
-            🔒 O acesso ao sistema é individual. A criação de novas contas ocorre exclusivamente por convite seguro emitido pelo Administrador Master. Cadastro livre desativado.
-          </div>
-        </div>
       </div>
     </div>
   `;

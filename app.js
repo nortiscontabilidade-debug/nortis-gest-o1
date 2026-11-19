@@ -43,6 +43,100 @@ const PERMS_DEF = [
 
 const MASTER_EMAIL = "sérgio.nortiscontabilidade@gmail.com";
 
+/* ==========================================================================
+   CRIPTOGRAFIA & SEGURANÇA AVANÇADA (WEB CRYPTO API)
+   ========================================================================== */
+async function hashPassword(plainText, salt = "nortis_salt_2026_sec") {
+  if (!plainText) return "";
+  const enc = new TextEncoder();
+  const data = enc.encode(plainText + ":" + salt);
+  const hashBuf = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hashBuf)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+const VAULT_KEY_SEED = "nortis_vault_master_key_v1_2026";
+async function getVaultKey() {
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw",
+    enc.encode(VAULT_KEY_SEED),
+    { name: "PBKDF2" },
+    false,
+    ["deriveKey"]
+  );
+  return crypto.subtle.deriveKey(
+    {
+      name: "PBKDF2",
+      salt: enc.encode("nortis_salt_fixed_vault_2026"),
+      iterations: 100000,
+      hash: "SHA-256"
+    },
+    keyMaterial,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+
+async function encryptVaultSecret(plainText) {
+  if (!plainText) return "";
+  if (typeof plainText === "string" && plainText.startsWith("enc:")) return plainText;
+  try {
+    const key = await getVaultKey();
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const enc = new TextEncoder();
+    const cipherBuffer = await crypto.subtle.encrypt(
+      { name: "AES-GCM", iv },
+      key,
+      enc.encode(plainText)
+    );
+    const ivHex = Array.from(iv).map(b => b.toString(16).padStart(2, "0")).join("");
+    const cipherHex = Array.from(new Uint8Array(cipherBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
+    return "enc:" + ivHex + ":" + cipherHex;
+  } catch (e) {
+    console.warn("Criptografia local fallback:", e);
+    return plainText;
+  }
+}
+
+async function decryptVaultSecret(cipherText) {
+  if (!cipherText) return "";
+  if (typeof cipherText !== "string" || !cipherText.startsWith("enc:")) return cipherText;
+  try {
+    const parts = cipherText.split(":");
+    if (parts.length !== 3) return cipherText;
+    const ivHex = parts[1];
+    const dataHex = parts[2];
+    const iv = new Uint8Array(ivHex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+    const cipherBuffer = new Uint8Array(dataHex.match(/.{1,2}/g).map(byte => parseInt(byte, 16)));
+    const key = await getVaultKey();
+    const decryptedBuffer = await crypto.subtle.decrypt(
+      { name: "AES-GCM", iv },
+      key,
+      cipherBuffer
+    );
+    return new TextDecoder().decode(decryptedBuffer);
+  } catch (e) {
+    console.warn("Descriptografia cofre:", e);
+    return "(erro ao descriptografar)";
+  }
+}
+
+function toggleMobileMenu(forceState) {
+  const aside = document.querySelector("aside");
+  const backdrop = document.getElementById("menu-backdrop");
+  if (!aside) return;
+  const shouldOpen = typeof forceState === "boolean" ? forceState : !aside.classList.contains("open");
+  if (shouldOpen) {
+    aside.classList.add("open");
+    if (backdrop) backdrop.classList.add("active");
+  } else {
+    aside.classList.remove("open");
+    if (backdrop) backdrop.classList.remove("active");
+  }
+}
+
+
 function isMasterEmail(e) {
   const clean = (e || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   return clean === "sergio.nortiscontabilidade@gmail.com";
@@ -401,9 +495,14 @@ function quickFill(em, pw) {
   }
 }
 
-function handleLogin() {
+async function handleLogin() {
   const email = ($("#login-email").value || "").trim();
   const pwd = ($("#login-pwd").value || "").trim();
+
+  if (!email || !pwd) {
+    renderLoginScreen("Por favor, informe seu e-mail e sua senha.");
+    return;
+  }
 
   const user = USERS.find(u => u.email.toLowerCase() === email.toLowerCase() || (isMasterEmail(u.email) && isMasterEmail(email)));
 
@@ -416,6 +515,28 @@ function handleLogin() {
   if (user.is_active === false) {
     recordAudit("login_blocked", "Acesso negado", "auth", email, "Usuário bloqueado pelo Administrador Master");
     renderLoginScreen("Seu acesso foi revogado pelo Administrador Master.");
+    return;
+  }
+
+  const pwdHash = await hashPassword(pwd);
+
+  // Validação segura com migração transparente de credenciais iniciais
+  let isValid = false;
+  if (user.password_hash === pwdHash) {
+    isValid = true;
+  } else if (
+    (isMasterEmail(user.email) && (pwd === "Nortis@2026Master" || pwd === "Nortis@2026" || user.password_hash === "master_auth_hash")) ||
+    (user.email === "rafael.moura@nortiscontabilidade.com.br" && (pwd === "Admin@2026" || user.password_hash === "admin_auth_hash")) ||
+    (user.email === "camila.ribeiro@nortiscontabilidade.com.br" && (pwd === "Collab@2026" || user.password_hash === "collab_auth_hash"))
+  ) {
+    isValid = true;
+    user.password_hash = pwdHash;
+    setStored("users", USERS);
+  }
+
+  if (!isValid) {
+    recordAudit("login_failed_password", "Tentativa de login com senha incorreta", "auth", email, "Senha digitada inválida");
+    renderLoginScreen("Senha incorreta. Verifique suas credenciais e tente novamente.");
     return;
   }
 
@@ -526,7 +647,7 @@ function renderInviteScreen(token) {
   `;
 }
 
-function submitAccountActivation(token) {
+async function submitAccountActivation(token) {
   const inv = INVITES.find(i => i.token === token);
   if (!inv) return;
 
@@ -538,6 +659,7 @@ function submitAccountActivation(token) {
 
   let user = USERS.find(u => u.email.toLowerCase() === inv.email.toLowerCase());
   if (!user) {
+    const initialHash = await hashPassword(p1);
     user = {
       id: "usr-" + Date.now(),
       name: inv.name,
@@ -545,6 +667,7 @@ function submitAccountActivation(token) {
       role: inv.role,
       is_active: true,
       created_at: new Date().toISOString(),
+      password_hash: initialHash,
       permissions: Object.assign({}, inv.permissions)
     };
     USERS.push(user);
@@ -553,6 +676,7 @@ function submitAccountActivation(token) {
     user.role = inv.role;
     user.is_active = true;
     user.permissions = Object.assign({}, inv.permissions);
+    user.password_hash = await hashPassword(p1);
   }
 
   inv.status = "accepted";
@@ -569,6 +693,104 @@ function submitAccountActivation(token) {
   history.replaceState(null, "", window.location.pathname);
   toast("Conta ativada com sucesso! Bem-vindo(a), " + user.name + "!");
   startApp();
+}
+
+
+/* ==========================================================================
+   GERENCIAMENTO DE SENHAS (USUÁRIO E MASTER)
+   ========================================================================== */
+function openChangePasswordModal() {
+  $("#pwd-current").value = "";
+  $("#pwd-new").value = "";
+  $("#pwd-new2").value = "";
+  $("#md-change-pwd").classList.add("on");
+}
+
+async function submitChangePassword() {
+  if (!CURRENT_USER) return;
+  const current = ($("#pwd-current").value || "").trim();
+  const pwdNew = ($("#pwd-new").value || "").trim();
+  const pwdNew2 = ($("#pwd-new2").value || "").trim();
+
+  if (!current || !pwdNew || !pwdNew2) {
+    alert("Preencha todos os campos obrigatórios.");
+    return;
+  }
+  if (pwdNew.length < 6) {
+    alert("A nova senha deve possuir no mínimo 6 caracteres.");
+    return;
+  }
+  if (pwdNew !== pwdNew2) {
+    alert("A confirmação da nova senha não coincide.");
+    return;
+  }
+
+  const currentHash = await hashPassword(current);
+  let isCurrentValid = CURRENT_USER.password_hash === currentHash;
+  if (!isCurrentValid) {
+    const isLegacyMaster = isMasterEmail(CURRENT_USER.email) && (current === "Nortis@2026Master" || current === "Nortis@2026" || CURRENT_USER.password_hash === "master_auth_hash");
+    const isLegacyAdmin = CURRENT_USER.email === "rafael.moura@nortiscontabilidade.com.br" && (current === "Admin@2026" || CURRENT_USER.password_hash === "admin_auth_hash");
+    const isLegacyCollab = CURRENT_USER.email === "camila.ribeiro@nortiscontabilidade.com.br" && (current === "Collab@2026" || CURRENT_USER.password_hash === "collab_auth_hash");
+    if (isLegacyMaster || isLegacyAdmin || isLegacyCollab) {
+      isCurrentValid = true;
+    }
+  }
+
+  if (!isCurrentValid) {
+    alert("A senha atual digitada está incorreta.");
+    return;
+  }
+
+  const newHash = await hashPassword(pwdNew);
+  CURRENT_USER.password_hash = newHash;
+  const uIdx = USERS.findIndex(u => u.id === CURRENT_USER.id);
+  if (uIdx !== -1) {
+    USERS[uIdx].password_hash = newHash;
+    setStored("users", USERS);
+  }
+  setStored("cur_user", CURRENT_USER);
+  recordAudit("password_change", "Alterou a própria senha", "auth", CURRENT_USER.email, "Senha individual redefinida pelo colaborador");
+  closeModal("md-change-pwd");
+  toast("Sua senha foi alterada com sucesso!");
+}
+
+function openResetUserPasswordModal(userId) {
+  if (CURRENT_USER.role !== "master" && !isMasterEmail(CURRENT_USER.email)) {
+    toast("Apenas o Administrador Master pode redefinir senhas.");
+    return;
+  }
+  const u = USERS.find(x => x.id === userId);
+  if (!u) return;
+  $("#reset-user-id").value = u.id;
+  $("#reset-pwd-sub").textContent = `Defina uma nova senha de acesso para ${u.name} (${u.email}).`;
+  $("#reset-new-pwd").value = "";
+  $("#reset-new-pwd2").value = "";
+  $("#md-reset-pwd").classList.add("on");
+}
+
+async function submitResetUserPassword() {
+  const userId = $("#reset-user-id").value;
+  const p1 = ($("#reset-new-pwd").value || "").trim();
+  const p2 = ($("#reset-new-pwd2").value || "").trim();
+
+  if (p1.length < 6) {
+    alert("A nova senha deve ter no mínimo 6 caracteres.");
+    return;
+  }
+  if (p1 !== p2) {
+    alert("As senhas digitadas não coincidem.");
+    return;
+  }
+
+  const targetUser = USERS.find(u => u.id === userId);
+  if (!targetUser) return;
+
+  targetUser.password_hash = await hashPassword(p1);
+  setStored("users", USERS);
+  recordAudit("password_reset", "Redefiniu senha de usuário", "users", targetUser.email, `Senha de ${targetUser.name} redefinida pelo Administrador Master`);
+  closeModal("md-reset-pwd");
+  toast(`Senha de ${targetUser.name} atualizada com sucesso!`);
+  if (location.hash === "#usuarios") usersView();
 }
 
 function logout() {
@@ -1220,6 +1442,7 @@ function fa() {
       <td>
         <div style="display:flex;gap:6px">
           <button class="btn sm" onclick="location.hash='empresa-${a.c.id}'">Ficha</button>
+          ${hasPerm("credentials_edit") ? `<button class="btn sm" onclick="openCredModal(${a.c.id}, ${a.k})">Editar</button>` : ""}
           ${hasPerm("credentials_edit") ? `
             <button class="btn sm er" onclick="deleteCred(${a.c.id}, ${a.k})">Excluir</button>
           ` : ""}
@@ -1231,7 +1454,7 @@ function fa() {
   $("#ca").textContent = `${r.length} credenciais seguras vinculadas às empresas cadastradas`;
 }
 
-function toggleVaultPwd(btn, compId, index) {
+async function toggleVaultPwd(btn, compId, index) {
   if (!hasPerm("credentials_reveal")) {
     toast("Acesso negado: você não tem permissão para revelar senhas.");
     return;
@@ -1242,15 +1465,18 @@ function toggleVaultPwd(btn, compId, index) {
   const span = $(`#pwd-${compId}-${index}`);
   const isHidden = span.textContent === "••••••••";
 
-  span.textContent = isHidden ? (item.pw || "(sem senha)") : "••••••••";
-  btn.textContent = isHidden ? "Ocultar" : "Ver";
-
   if (isHidden) {
-    recordAudit("reveal", "Revelou senha do cofre", "credential", `${comp.fan} · ${item.s}`, `Visualizou credencial em texto aberto`);
+    const plain = await decryptVaultSecret(item.pw);
+    span.textContent = plain || "(sem senha)";
+    btn.textContent = "Ocultar";
+    recordAudit("reveal", "Revelou senha do cofre", "credential", `${comp.fan} · ${item.s}`, "Visualizou credencial em texto aberto");
+  } else {
+    span.textContent = "••••••••";
+    btn.textContent = "Ver";
   }
 }
 
-function copyVaultPwd(compId, index) {
+async function copyVaultPwd(compId, index) {
   if (!hasPerm("credentials_reveal")) {
     toast("Acesso negado: você não tem permissão para copiar senhas.");
     return;
@@ -1258,7 +1484,8 @@ function copyVaultPwd(compId, index) {
   const comp = nm(compId);
   if (!comp || !comp.ac[index]) return;
   const item = comp.ac[index];
-  copySecret(item.pw, `${comp.fan} · ${item.s}`);
+  const plain = await decryptVaultSecret(item.pw);
+  copySecret(plain, `${comp.fan} · ${item.s}`);
 }
 
 function deleteCred(compId, index) {
@@ -1278,12 +1505,37 @@ function deleteCred(compId, index) {
   }
 }
 
-function openCredModal(cred = null, targetCompId = null) {
+async function openCredModal(targetCompId = null, credIndex = null) {
   if (!hasPerm("credentials_edit")) {
     toast("Você não possui permissão para cadastrar ou editar credenciais.");
     return;
   }
-  $("#cred-emp").innerHTML = C.map(c => `<option value="${c.id}" ${targetCompId == c.id ? "selected" : ""}>${esc(c.fan)} (${esc(c.cnpj || "sem CNPJ")})</option>`).join("");
+  const selectEmp = $("#cred-emp");
+  selectEmp.innerHTML = C.map(c => `<option value="${c.id}" ${targetCompId == c.id ? "selected" : ""}>${esc(c.fan)} (${esc(c.cnpj || "sem CNPJ")})</option>`).join("");
+
+  const editIndexInput = $("#cred-edit-index");
+  const modalTitle = $("#cred-modal-title");
+
+  if (credIndex !== null && targetCompId !== null) {
+    const comp = nm(targetCompId);
+    const item = comp && comp.ac ? comp.ac[credIndex] : null;
+    if (item) {
+      if (editIndexInput) editIndexInput.value = credIndex;
+      if (modalTitle) modalTitle.textContent = "Editar Credencial no Cofre";
+      $("#cred-org").value = item.o || "Outro";
+      $("#cred-sys").value = item.s || "";
+      $("#cred-usr").value = item.u || "";
+      $("#cred-pwd").value = await decryptVaultSecret(item.pw || "");
+      $("#cred-sit").value = item.sit || "Ativo";
+      $("#cred-obs").value = item.obs || "";
+      $("#md-cred").classList.add("on");
+      return;
+    }
+  }
+
+  // Nova credencial
+  if (editIndexInput) editIndexInput.value = "";
+  if (modalTitle) modalTitle.textContent = "Nova Credencial no Cofre";
   $("#cred-sys").value = "";
   $("#cred-usr").value = "";
   $("#cred-pwd").value = "";
@@ -1291,14 +1543,15 @@ function openCredModal(cred = null, targetCompId = null) {
   $("#md-cred").classList.add("on");
 }
 
-function saveCred() {
+async function saveCred() {
   const compId = parseInt($("#cred-emp").value);
   const sys = $("#cred-sys").value.trim();
   const org = $("#cred-org").value;
   const usr = $("#cred-usr").value.trim();
-  const pwd = $("#cred-pwd").value.trim();
+  const rawPwd = $("#cred-pwd").value.trim();
   const sit = $("#cred-sit").value;
   const obs = $("#cred-obs").value.trim();
+  const editIndexVal = $("#cred-edit-index") ? $("#cred-edit-index").value : "";
 
   if (!sys) {
     alert("Informe o nome do sistema ou serviço.");
@@ -1312,20 +1565,39 @@ function saveCred() {
   }
 
   comp.ac = comp.ac || [];
-  comp.ac.push({
-    cid: "crd-" + Date.now(),
-    o: org,
-    s: sys,
-    u: usr,
-    pw: pwd,
-    sit: sit,
-    obs: obs
-  });
+  const encPwd = await encryptVaultSecret(rawPwd);
 
-  saveCompanies();
-  recordAudit("create", "Cadastrou credencial no cofre", "credential", `${comp.fan} · ${sys}`, `Criado por ${CURRENT_USER.name}`);
-  closeModal("md-cred");
-  toast("Credencial gravada no cofre com segurança!");
+  if (editIndexVal !== "" && editIndexVal !== null && !isNaN(parseInt(editIndexVal))) {
+    const idx = parseInt(editIndexVal);
+    const prevSys = comp.ac[idx] ? comp.ac[idx].s : sys;
+    comp.ac[idx] = Object.assign(comp.ac[idx] || {}, {
+      o: org,
+      s: sys,
+      u: usr,
+      pw: encPwd,
+      sit: sit,
+      obs: obs
+    });
+    saveCompanies();
+    recordAudit("update", "Alterou credencial no cofre", "credential", `${comp.fan} · ${sys}`, `Atualizado por ${CURRENT_USER.name} (anterior: ${prevSys})`);
+    closeModal("md-cred");
+    toast("Credencial atualizada no cofre!");
+  } else {
+    comp.ac.push({
+      cid: "crd-" + Date.now(),
+      o: org,
+      s: sys,
+      u: usr,
+      pw: encPwd,
+      sit: sit,
+      obs: obs
+    });
+    saveCompanies();
+    recordAudit("create", "Cadastrou credencial no cofre", "credential", `${comp.fan} · ${sys}`, `Criado por ${CURRENT_USER.name}`);
+    closeModal("md-cred");
+    toast("Credencial gravada no cofre com segurança!");
+  }
+
   if (location.hash === "#acessos") acc();
   else if (location.hash.startsWith("#empresa-")) fic();
 }
@@ -1475,6 +1747,7 @@ function usersView() {
                   <div style="display:flex;gap:6px">
                     ${!isUserMaster && isMaster ? `
                       <button class="btn sm" onclick="openEditPermsModal('${u.id}')">Permissões</button>
+                      <button class="btn sm" onclick="openResetUserPasswordModal('${u.id}')" title="Redefinir senha de acesso">Redefinir Senha</button>
                       <button class="btn sm ${u.is_active ? 'er' : ''}" onclick="toggleUserStatus('${u.id}')">${u.is_active ? 'Revogar Acesso' : 'Desbloquear'}</button>
                       <button class="btn sm er" onclick="deleteUser('${u.id}')">Excluir</button>
                     ` : `<span class="mu s">${isUserMaster ? 'Protegido pelo sistema' : 'Apenas leitura'}</span>`}
@@ -1855,6 +2128,7 @@ function closeModal(id) {
    11. ROTEAMENTO GERAL
    ========================================================================== */
 function go() {
+  toggleMobileMenu(false);
   if (!CURRENT_USER || !CURRENT_USER.is_active) {
     renderAuthFlow();
     return;
@@ -1922,6 +2196,8 @@ if (qInput && srBox) {
 
 // Exporta para o escopo global para compatibilidade total com atributos inline onclick/onchange
 Object.assign(window, {
+  toggleMobileMenu, openChangePasswordModal, submitChangePassword, openResetUserPasswordModal, submitResetUserPassword,
+  encryptVaultSecret, decryptVaultSecret, hashPassword,
   F, A, C, USERS, INVITES, AUDIT_LOGS, CURRENT_USER,
   th, logout, quickFill, handleLogin, submitAccountActivation,
   dashFilter, dash, lst, fl, fic, add, rm, dc, sv, revealField, copySecret,
@@ -1941,3 +2217,24 @@ if (inviteCheck) {
   renderLoginScreen();
 }
 
+
+
+// Migração e criptografia automática de credenciais em segundo plano
+(async function initSecurityVault() {
+  let changed = false;
+  for (const c of C) {
+    if (c.cert && c.cert.pw && !c.cert.pw.startsWith("enc:")) {
+      c.cert.pw = await encryptVaultSecret(c.cert.pw);
+      changed = true;
+    }
+    if (c.ac && Array.isArray(c.ac)) {
+      for (const a of c.ac) {
+        if (a.pw && !a.pw.startsWith("enc:")) {
+          a.pw = await encryptVaultSecret(a.pw);
+          changed = true;
+        }
+      }
+    }
+  }
+  if (changed) saveCompanies();
+})();

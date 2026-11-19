@@ -51,14 +51,20 @@
   <div class="me-email" id="u-email">sérgio.nortiscontabilidade@gmail.com</div>
   <div><span class="me-role ok" id="u-role-pill">ADMIN MASTER</span></div>
   <div class="me-actions">
-   <span class="mu s" id="u-status-txt">Sessão ativa</span>
+   <a class="lk" onclick="openChangePasswordModal()" style="margin:0;font-size:11px" title="Alterar senha pessoal">Alterar Senha</a>
+   <span class="mu s">·</span>
    <a class="lk er" onclick="logout()" style="margin:0">Sair</a>
   </div>
  </div>
 </aside>
 
+<div id="menu-backdrop" class="menu-backdrop" onclick="toggleMobileMenu(false)"></div>
+
 <main>
  <div class="top">
+  <button class="mobile-menu-btn" onclick="toggleMobileMenu()" title="Abrir menu" aria-label="Abrir menu">
+   <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  </button>
   <div class="sb"><input id="q" placeholder="Buscar por CNPJ ou razão social" autocomplete="off"><div id="sr"></div></div>
   <div class="sp"></div>
   <button class="btn" onclick="th()" title="Alternar tema claro/escuro">Tema</button>
@@ -123,6 +129,7 @@
 <div class="modal-overlay" id="md-cred">
  <div class="mb">
   <div class="hh"><h2 id="cred-modal-title">Nova Credencial no Cofre</h2><span class="x" onclick="closeModal('md-cred')">×</span></div>
+  <input type="hidden" id="cred-edit-index" value="">
   <label>Empresa *<select id="cred-emp"></select></label>
   <div class="g2">
    <label>Órgão / Categoria *
@@ -155,6 +162,41 @@
    <button class="btn" onclick="closeModal('md-cred')">Cancelar</button>
    <button class="btn pr" onclick="saveCred()">Salvar no Cofre</button>
   </div>
+ </div>
+</div>
+
+
+<!-- Modal Alterar Minha Senha -->
+<div class="modal-overlay" id="md-change-pwd">
+ <div class="mb">
+  <div class="hh"><h2>Alterar Minha Senha</h2><span class="x" onclick="closeModal('md-change-pwd')">×</span></div>
+  <p class="sub" style="margin-bottom:14px">Defina uma nova senha individual para a sua conta.</p>
+  <form onsubmit="event.preventDefault();submitChangePassword();">
+   <label>Senha Atual *<input id="pwd-current" type="password" required placeholder="Sua senha atual"></label>
+   <label>Nova Senha (mínimo 6 caracteres) *<input id="pwd-new" type="password" required minlength="6" placeholder="Nova senha"></label>
+   <label>Confirmar Nova Senha *<input id="pwd-new2" type="password" required minlength="6" placeholder="Confirme a nova senha"></label>
+   <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px">
+    <button type="button" class="btn" onclick="closeModal('md-change-pwd')">Cancelar</button>
+    <button type="submit" class="btn pr">Salvar Nova Senha</button>
+   </div>
+  </form>
+ </div>
+</div>
+
+<!-- Modal Redefinir Senha de Usuário (Master) -->
+<div class="modal-overlay" id="md-reset-pwd">
+ <div class="mb">
+  <div class="hh"><h2>Redefinir Senha do Usuário</h2><span class="x" onclick="closeModal('md-reset-pwd')">×</span></div>
+  <p class="sub" id="reset-pwd-sub" style="margin-bottom:14px">Defina uma nova senha de acesso para o colaborador.</p>
+  <form onsubmit="event.preventDefault();submitResetUserPassword();">
+   <input type="hidden" id="reset-user-id">
+   <label>Nova Senha *<input id="reset-new-pwd" type="password" required minlength="6" placeholder="Nova senha temporária"></label>
+   <label>Confirmar Nova Senha *<input id="reset-new-pwd2" type="password" required minlength="6" placeholder="Confirme a nova senha"></label>
+   <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:20px">
+    <button type="button" class="btn" onclick="closeModal('md-reset-pwd')">Cancelar</button>
+    <button type="submit" class="btn pr">Redefinir Senha</button>
+   </div>
+  </form>
  </div>
 </div>
 

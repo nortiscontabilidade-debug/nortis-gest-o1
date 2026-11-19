@@ -477,9 +477,45 @@ tbody tr.rw:hover { background: var(--hv); }
 }
 .modal-overlay.on { display: grid; }
 
+.mobile-menu-btn {
+  display: none;
+  background: transparent;
+  border: 1px solid var(--bd);
+  color: var(--tx);
+  border-radius: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+  margin-right: 8px;
+}
+.mobile-menu-btn:hover { background: var(--hv); }
+
+.menu-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .65);
+  backdrop-filter: blur(2px);
+  z-index: 95;
+}
+.menu-backdrop.active { display: block; }
+
 @media (max-width: 900px) {
-  aside { display: none; }
-  .top { padding: 14px 16px; }
-  #v { padding: 18px 16px; }
+  .mobile-menu-btn { display: inline-flex; }
+  aside {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 270px;
+    z-index: 100;
+    box-shadow: 10px 0 30px rgba(0,0,0,.6);
+    overflow-y: auto;
+  }
+  aside.open { display: flex; }
+  .top { padding: 12px 14px; }
+  #v { padding: 16px 14px; }
   .g4, .g3, .g2x, .fl { grid-template-columns: 1fr; }
 }

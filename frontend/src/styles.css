@@ -700,3 +700,169 @@ tbody tr.rw:hover { background: var(--hv); }
   font-size: 11px;
   color: var(--mu);
 }
+
+/* ==========================================================================
+   MELHORIAS DE UX, ENDEREÇO, DEMANDAS E STATUS DO CLIENTE
+   ========================================================================== */
+.address-fields-grid {
+  display: grid;
+  grid-template-columns: 140px 1.5fr 100px 1fr;
+  gap: 12px;
+  grid-column: span 3;
+}
+@media (max-width: 900px) {
+  .address-fields-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 600px) {
+  .address-fields-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.company-hero-card {
+  background: var(--cd);
+  border: 1px solid var(--bd);
+  border-radius: 12px;
+  padding: 16px 20px;
+  margin-bottom: 16px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+.company-hero-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.company-hero-title {
+  font-size: 22px;
+  font-weight: 800;
+  color: #fff;
+  letter-spacing: -0.5px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+:root[data-theme="light"] .company-hero-title {
+  color: var(--tx);
+}
+.company-hero-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  color: var(--mu);
+}
+
+.status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  user-select: none;
+}
+.status-badge.ativo {
+  background: rgba(47, 203, 143, .16);
+  color: var(--ok);
+  border: 1px solid rgba(47, 203, 143, .3);
+}
+.status-badge.suspenso {
+  background: rgba(227, 169, 59, .16);
+  color: var(--wn);
+  border: 1px solid rgba(227, 169, 59, .3);
+}
+.status-badge.encerrado {
+  background: rgba(140, 148, 145, .16);
+  color: var(--mu);
+  border: 1px solid rgba(140, 148, 145, .3);
+}
+
+.demand-chips-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+.demand-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 8px;
+  background: var(--hv);
+  border: 1px solid var(--bd);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tx);
+  cursor: pointer;
+  transition: all .15s;
+  user-select: none;
+}
+.demand-chip.selected {
+  background: rgba(8, 183, 133, .14);
+  border-color: var(--pr);
+  color: var(--pr);
+}
+.demand-chip input[type="checkbox"] {
+  display: none;
+}
+
+.discrete-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--mu);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  gap: 4px;
+  transition: all .15s;
+  text-decoration: none;
+}
+.discrete-action-btn:hover {
+  background: var(--hv);
+  border-color: var(--bd);
+  color: var(--tx);
+}
+.discrete-action-btn.primary {
+  color: var(--pr);
+}
+.discrete-action-btn.primary:hover {
+  background: rgba(8, 183, 133, .12);
+  border-color: var(--pr);
+}
+.discrete-action-btn.danger:hover {
+  background: rgba(242, 122, 122, .12);
+  border-color: var(--er);
+  color: var(--er);
+}
+
+.manage-item-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .02);
+  border: 1px solid var(--bd);
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.manage-item-row:hover {
+  background: var(--hv);
+}
+

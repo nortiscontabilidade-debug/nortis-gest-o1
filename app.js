@@ -287,7 +287,7 @@ function hasPerm(permKey) {
 }
 
 /* ==========================================================================
-   2. DADOS DINÂMICOS: SEGMENTOS, REGIMES E VALIDAÇÃO CNPJ
+   2. GERENCIAMENTO DINÂMICO: SEGMENTOS E DEMANDAS CONTRATADAS
    ========================================================================== */
 const DEFAULT_SEGMENTS = [
   "E-commerce",
@@ -304,15 +304,35 @@ const DEFAULT_SEGMENTS = [
 let SEGMENTS = getStored("segments", DEFAULT_SEGMENTS);
 function saveSegments() { setStored("segments", SEGMENTS); }
 
-function openAddSegmentModal(targetSelectId = null) {
-  const input = $("#new-segment-name");
-  if (input) {
-    input.value = "";
-    input.dataset.targetSelect = targetSelectId || "";
-  }
+function openManageSegmentsModal() {
+  renderSegmentListInModal();
   const modal = $("#md-segment");
   if (modal) modal.classList.add("on");
-  setTimeout(() => { if (input) input.focus(); }, 100);
+  setTimeout(() => {
+    const input = $("#new-segment-name");
+    if (input) { input.value = ""; input.focus(); }
+  }, 100);
+}
+
+function renderSegmentListInModal() {
+  const container = $("#segment-list-container");
+  if (!container) return;
+
+  container.innerHTML = SEGMENTS.map(s => {
+    const count = C.filter(c => c.seg === s).length;
+    return `
+      <div class="manage-item-row">
+        <div>
+          <b>${esc(s)}</b>
+          <span class="s mu" style="margin-left:6px">(${count} ${count === 1 ? 'empresa vinculada' : 'empresas vinculadas'})</span>
+        </div>
+        <div style="display:flex;gap:4px">
+          <button type="button" class="btn sm" onclick="editSegmentPrompt('${esc(s)}')" title="Editar nome do segmento">Editar</button>
+          <button type="button" class="btn sm er" onclick="deleteSegmentCheck('${esc(s)}')" title="Excluir segmento">${count > 0 ? 'Bloqueado' : 'Excluir'}</button>
+        </div>
+      </div>
+    `;
+  }).join("");
 }
 
 function submitNewSegment() {
@@ -324,53 +344,220 @@ function submitNewSegment() {
     input.focus();
     return;
   }
-  if (!SEGMENTS.includes(name)) {
-    SEGMENTS.push(name);
-    saveSegments();
-    recordAudit("create_segment", "Criou novo segmento", "segment", name, `Segmento adicionado por ${CURRENT_USER ? CURRENT_USER.name : 'usuário'}`);
+  if (SEGMENTS.includes(name)) {
+    toast("Este segmento já existe.");
+    input.focus();
+    return;
   }
 
-  // Atualiza selects presentes na tela
-  const targetId = input.dataset.targetSelect;
-  $$("select[data-p='seg'], #company-seg-select, #wiz-seg-select").forEach(sel => {
-    const currentVal = sel.value;
-    sel.innerHTML = SEGMENTS.map(s => `<option value="${esc(s)}" ${s === name ? 'selected' : (s === currentVal ? 'selected' : '')}>${esc(s)}</option>`).join("");
-    sel.value = name;
-  });
-
-  if (typeof wizardData === "object" && wizardData) {
-    wizardData.seg = name;
-    if (typeof autoSaveDraft === "function") autoSaveDraft();
-  }
-  if (typeof D === "object" && D) {
-    D.seg = name;
-    dy = 1;
-  }
-
-  closeModal("md-segment");
+  SEGMENTS.push(name);
+  saveSegments();
+  recordAudit("create_segment", "Criou novo segmento", "segment", name, `Segmento adicionado por ${CURRENT_USER ? CURRENT_USER.name : 'usuário'}`);
+  input.value = "";
+  renderSegmentListInModal();
+  updateSegmentSelects(name);
   toast(`Segmento "${name}" cadastrado com sucesso!`);
 }
 
+function editSegmentPrompt(oldName) {
+  const newName = prompt(`Informe o novo nome para o segmento "${oldName}":`, oldName);
+  if (!newName || !newName.trim() || newName.trim() === oldName) return;
+  const trimmed = newName.trim();
+  if (SEGMENTS.includes(trimmed)) {
+    alert("Já existe outro segmento com este nome.");
+    return;
+  }
+
+  const idx = SEGMENTS.indexOf(oldName);
+  if (idx >= 0) {
+    SEGMENTS[idx] = trimmed;
+    saveSegments();
+    // Atualiza empresas vinculadas
+    C.forEach(c => {
+      if (c.seg === oldName) c.seg = trimmed;
+    });
+    saveCompanies();
+    if (typeof wizardData === "object" && wizardData && wizardData.seg === oldName) {
+      wizardData.seg = trimmed;
+    }
+    if (typeof D === "object" && D && D.seg === oldName) {
+      D.seg = trimmed;
+    }
+    renderSegmentListInModal();
+    updateSegmentSelects(trimmed);
+    recordAudit("update_segment", "Editou segmento", "segment", `${oldName} → ${trimmed}`, "Renomeou segmento");
+    toast(`Segmento atualizado para "${trimmed}".`);
+  }
+}
+
+function deleteSegmentCheck(name) {
+  const count = C.filter(c => c.seg === name).length;
+  if (count > 0) {
+    alert(`Não é permitido excluir o segmento "${name}" pois existem ${count} empresa(s) vinculadas a ele.\n\nPara excluir este segmento, altere antes o segmento das empresas vinculadas.`);
+    return;
+  }
+
+  if (!confirm(`Deseja realmente excluir o segmento "${name}"?`)) return;
+
+  SEGMENTS = SEGMENTS.filter(s => s !== name);
+  saveSegments();
+  renderSegmentListInModal();
+  updateSegmentSelects();
+  recordAudit("delete_segment", "Excluiu segmento", "segment", name, "Excluiu segmento sem vínculos");
+  toast(`Segmento "${name}" removido.`);
+}
+
+function updateSegmentSelects(selectedName) {
+  $$("select[data-wp='seg'], select[data-p='seg'], #company-seg-select, #wiz-seg-select").forEach(sel => {
+    const curVal = selectedName || sel.value;
+    sel.innerHTML = SEGMENTS.map(s => `<option value="${esc(s)}" ${s === curVal ? 'selected' : ''}>${esc(s)}</option>`).join("");
+    if (selectedName) sel.value = selectedName;
+  });
+}
+
+// 2.2 GERENCIAMENTO DE DEMANDAS CONTRATADAS
+const DEFAULT_DEMANDS = [
+  "Contábil",
+  "Fiscal",
+  "Departamento Pessoal",
+  "Legalização",
+  "Consultoria",
+  "BPO Financeiro",
+  "Outros"
+];
+
+let DEMANDS = getStored("demands", DEFAULT_DEMANDS);
+function saveDemands() { setStored("demands", DEMANDS); }
+
+function openManageDemandsModal() {
+  renderDemandListInModal();
+  const modal = $("#md-demand");
+  if (modal) modal.classList.add("on");
+  setTimeout(() => {
+    const input = $("#new-demand-name");
+    if (input) { input.value = ""; input.focus(); }
+  }, 100);
+}
+
+function renderDemandListInModal() {
+  const container = $("#demand-list-container");
+  if (!container) return;
+
+  container.innerHTML = DEMANDS.map(d => {
+    const count = C.filter(c => Array.isArray(c.demandas) && c.demandas.includes(d)).length;
+    return `
+      <div class="manage-item-row">
+        <div>
+          <b>${esc(d)}</b>
+          <span class="s mu" style="margin-left:6px">(${count} ${count === 1 ? 'empresa vinculada' : 'empresas vinculadas'})</span>
+        </div>
+        <div style="display:flex;gap:4px">
+          <button type="button" class="btn sm" onclick="editDemandPrompt('${esc(d)}')" title="Editar nome da demanda">Editar</button>
+          <button type="button" class="btn sm er" onclick="deleteDemandCheck('${esc(d)}')" title="Excluir demanda">${count > 0 ? 'Bloqueado' : 'Excluir'}</button>
+        </div>
+      </div>
+    `;
+  }).join("");
+}
+
+function submitNewDemand() {
+  const input = $("#new-demand-name");
+  if (!input) return;
+  const name = input.value.trim();
+  if (!name) {
+    toast("Informe o nome da demanda.");
+    input.focus();
+    return;
+  }
+  if (DEMANDS.includes(name)) {
+    toast("Esta demanda já existe.");
+    input.focus();
+    return;
+  }
+
+  DEMANDS.push(name);
+  saveDemands();
+  recordAudit("create_demand", "Criou nova demanda", "demand", name, `Demanda adicionada por ${CURRENT_USER ? CURRENT_USER.name : 'usuário'}`);
+  input.value = "";
+  renderDemandListInModal();
+  if (typeof renderWizard === "function" && wizardStep === 5) renderWizard();
+  if (typeof fic === "function" && currentCompanyTab === "demandas") fic();
+  toast(`Demanda "${name}" cadastrada com sucesso!`);
+}
+
+function editDemandPrompt(oldName) {
+  const newName = prompt(`Informe o novo nome para a demanda "${oldName}":`, oldName);
+  if (!newName || !newName.trim() || newName.trim() === oldName) return;
+  const trimmed = newName.trim();
+  if (DEMANDS.includes(trimmed)) {
+    alert("Já existe outra demanda com este nome.");
+    return;
+  }
+
+  const idx = DEMANDS.indexOf(oldName);
+  if (idx >= 0) {
+    DEMANDS[idx] = trimmed;
+    saveDemands();
+    // Atualiza empresas vinculadas
+    C.forEach(c => {
+      if (Array.isArray(c.demandas)) {
+        const dIdx = c.demandas.indexOf(oldName);
+        if (dIdx >= 0) c.demandas[dIdx] = trimmed;
+      }
+    });
+    saveCompanies();
+    if (typeof wizardData === "object" && wizardData && Array.isArray(wizardData.demandas)) {
+      const wIdx = wizardData.demandas.indexOf(oldName);
+      if (wIdx >= 0) wizardData.demandas[wIdx] = trimmed;
+    }
+    if (typeof D === "object" && D && Array.isArray(D.demandas)) {
+      const dIdx = D.demandas.indexOf(oldName);
+      if (dIdx >= 0) D.demandas[dIdx] = trimmed;
+    }
+    renderDemandListInModal();
+    if (typeof renderWizard === "function" && wizardStep === 5) renderWizard();
+    if (typeof fic === "function" && currentCompanyTab === "demandas") fic();
+    recordAudit("update_demand", "Editou demanda", "demand", `${oldName} → ${trimmed}`, "Renomeou demanda contratada");
+    toast(`Demanda atualizada para "${trimmed}".`);
+  }
+}
+
+function deleteDemandCheck(name) {
+  const linked = C.filter(c => Array.isArray(c.demandas) && c.demandas.includes(name));
+  if (linked.length > 0) {
+    const names = linked.slice(0, 3).map(c => c.fan).join(", ");
+    const more = linked.length > 3 ? ` e mais ${linked.length - 3}` : "";
+    alert(`Não é possível excluir a demanda "${name}" pois ela está vinculada a ${linked.length} empresa(s) (${names}${more}).\n\nPara excluir, primeiro desvincule esta demanda nas empresas vinculadas.`);
+    return;
+  }
+
+  if (!confirm(`Deseja realmente excluir a demanda "${name}"?`)) return;
+
+  DEMANDS = DEMANDS.filter(d => d !== name);
+  saveDemands();
+  renderDemandListInModal();
+  if (typeof renderWizard === "function" && wizardStep === 5) renderWizard();
+  if (typeof fic === "function" && currentCompanyTab === "demandas") fic();
+  recordAudit("delete_demand", "Excluiu demanda", "demand", name, "Excluiu demanda sem vínculos");
+  toast(`Demanda "${name}" removida.`);
+}
+
+/* ==========================================================================
+   2.3 STATUS DO CLIENTE & REGIMES
+   ========================================================================== */
+const STATUS_CLIENTE_OPTS = ["Ativo", "Suspenso", "Encerrado"];
 const REG = ["Simples Nacional", "Lucro Presumido", "Lucro Real", "MEI"];
-const STS = ["Ativa", "Em implantação", "Pausada"];
 const OR = ["GOV.BR", "SEFAZ", "Prefeitura", "e-CAC", "FGTS", "Banco", "Marketplace", "Emissor NF-e", "Certificado Digital", "Outro"];
 const SIT = ["Ativo", "Revisar", "Pendente"];
 
-const DEFAULT_TAX_OBLIGATIONS = [
-  { id: "das", name: "PGDAS-D / Guia DAS", period: "Mensal (até dia 20)" },
-  { id: "dctfweb", name: "DCTFWeb", period: "Mensal (até dia 15)" },
-  { id: "reinf", name: "EFD-Reinf", period: "Mensal (até dia 15)" },
-  { id: "esocial", name: "eSocial / Folha de Pagamento", period: "Mensal (até dia 07)" },
-  { id: "sped_fiscal", name: "SPED Fiscal (ICMS/IPI)", period: "Mensal" },
-  { id: "sped_contrib", name: "SPED Contribuições (PIS/COFINS)", period: "Mensal" },
-  { id: "nfse", name: "Emissão de NFS-e Municipal", period: "Conforme faturamento" },
-  { id: "nfe", name: "Emissão de NF-e Estadual", period: "Conforme faturamento" },
-  { id: "defis", name: "DEFIS / DASN-SIMEI", period: "Anual (março/maio)" },
-  { id: "ecd_ecf", name: "ECD / ECF", period: "Anual" }
-];
+function statusClienteBadge(st) {
+  const s = st || "Ativo";
+  const cls = s === "Ativo" ? "ativo" : (s === "Suspenso" ? "suspenso" : "encerrado");
+  return `<span class="status-badge ${cls}">● ${esc(s)}</span>`;
+}
 
 /* ==========================================================================
-   VALIDAÇÃO E CONSULTA AUTOMÁTICA DE CNPJ (REQUISITO 4)
+   VALIDAÇÃO, CEP E CONSULTA AUTOMÁTICA DE CNPJ
    ========================================================================== */
 function isValidCNPJ(cnpj) {
   if (!cnpj) return false;
@@ -396,13 +583,63 @@ function formatCNPJ(val) {
   return v;
 }
 
+function formatCEP(val) {
+  const v = String(val || "").replace(/\D/g, "").slice(0, 8);
+  if (v.length > 5) return v.replace(/^(\d{5})(\d{1,3})$/, "$1-$2");
+  return v;
+}
+
+function formatCPFCNPJ(val) {
+  const d = String(val || "").replace(/\D/g, "");
+  if (d.length <= 11) {
+    if (d.length > 9) return d.replace(/^(\d{3})(\d{3})(\d{3})(\d{1,2})$/, "$1.$2.$3-$4");
+    if (d.length > 6) return d.replace(/^(\d{3})(\d{3})(\d*)$/, "$1.$2.$3");
+    if (d.length > 3) return d.replace(/^(\d{3})(\d*)$/, "$1.$2");
+    return d;
+  }
+  return formatCNPJ(d);
+}
+
+async function lookupCEP(cepRaw) {
+  const digits = String(cepRaw || "").replace(/\D/g, "");
+  if (digits.length !== 8) return null;
+  try {
+    const res = await fetch(`https://brasilapi.com.br/api/cep/v1/${digits}`);
+    if (res.ok) {
+      const d = await res.json();
+      return {
+        logradouro: d.street || "",
+        bairro: d.neighborhood || "",
+        cidade: d.city || "",
+        uf: d.state || ""
+      };
+    }
+  } catch (e) {
+    try {
+      const res2 = await fetch(`https://viacep.com.br/ws/${digits}/json/`);
+      if (res2.ok) {
+        const d2 = await res2.json();
+        if (!d2.erro) {
+          return {
+            logradouro: d2.logradouro || "",
+            bairro: d2.bairro || "",
+            cidade: d2.localidade || "",
+            uf: d2.uf || ""
+          };
+        }
+      }
+    } catch (e2) {}
+  }
+  return null;
+}
+
 async function fetchOfficialCNPJ(cnpjInput) {
   const digits = String(cnpjInput || "").replace(/\D/g, "");
   if (digits.length !== 14) {
     throw new Error("Informe os 14 dígitos do CNPJ.");
   }
 
-  // 1. Minha Receita (fonte oficial pública direta, com QSA e CNAEs completos)
+  // 1. Minha Receita
   try {
     const res = await fetch(`https://minhareceita.org/${digits}`);
     if (res.ok) {
@@ -410,10 +647,10 @@ async function fetchOfficialCNPJ(cnpjInput) {
       return parseMinhaReceita(d);
     }
   } catch (e) {
-    console.warn("MinhaReceita endpoint offline/erro:", e);
+    console.warn("MinhaReceita offline:", e);
   }
 
-  // 2. BrasilAPI (fallback oficial secundário)
+  // 2. BrasilAPI
   try {
     const res2 = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${digits}`);
     if (res2.ok) {
@@ -421,25 +658,13 @@ async function fetchOfficialCNPJ(cnpjInput) {
       return parseBrasilAPI(d2);
     }
   } catch (e2) {
-    console.warn("BrasilAPI endpoint offline/erro:", e2);
+    console.warn("BrasilAPI offline:", e2);
   }
 
   throw new Error("Não foi possível conectar com as fontes da Receita Federal no momento. Preencha os campos manualmente.");
 }
 
 function parseMinhaReceita(d) {
-  const endParts = [];
-  if (d.descricao_tipo_de_logradouro && d.logradouro) {
-    endParts.push(`${d.descricao_tipo_de_logradouro} ${d.logradouro}`);
-  } else if (d.logradouro) {
-    endParts.push(d.logradouro);
-  }
-  if (d.numero) endParts.push(`nº ${d.numero}`);
-  if (d.complemento) endParts.push(d.complemento);
-  if (d.bairro) endParts.push(d.bairro);
-  if (d.municipio && d.uf) endParts.push(`${d.municipio}/${d.uf}`);
-  if (d.cep) endParts.push(`CEP ${d.cep}`);
-
   const tel = d.ddd_telefone_1 ? (d.ddd_telefone_1.length >= 10 ? `(${d.ddd_telefone_1.slice(0,2)}) ${d.ddd_telefone_1.slice(2)}` : d.ddd_telefone_1) : "";
 
   let reg = "Simples Nacional";
@@ -457,15 +682,24 @@ function parseMinhaReceita(d) {
 
   const cnaesSec = (d.cnaes_secundarios || []).map(c => `${c.codigo} · ${c.descricao}`).slice(0, 6).join("; ");
 
+  const logradouro = d.descricao_tipo_de_logradouro && d.logradouro ? `${d.descricao_tipo_de_logradouro} ${d.logradouro}` : (d.logradouro || "");
+
   return {
     raz: d.razao_social || "",
     fan: d.nome_fantasia || d.razao_social || "",
     cnpj: formatCNPJ(d.cnpj),
     situacao: d.descricao_situacao_cadastral || "Ativa",
+    status_cliente: "Ativo",
     ini: (d.data_inicio_atividade || "").slice(0, 7),
     nat: `${d.codigo_natureza_juridica ? d.codigo_natureza_juridica + ' · ' : ''}${d.natureza_juridica || ''}`,
     porte: d.porte || "Demais",
-    end: endParts.join(", "),
+    end_cep: formatCEP(d.cep),
+    end_logradouro: logradouro,
+    end_numero: d.numero || "S/N",
+    end_complemento: d.complemento || "",
+    end_bairro: d.bairro || "",
+    end_cidade: d.municipio || "",
+    end_uf: d.uf || "",
     tel,
     mail: (d.email || "").toLowerCase(),
     cnae: d.cnae_fiscal ? `${d.cnae_fiscal} · ${d.cnae_fiscal_descricao || ''}` : "",
@@ -473,23 +707,12 @@ function parseMinhaReceita(d) {
     ie: d.inscricao_estadual || "",
     im: d.inscricao_municipal || "",
     reg,
+    demandas: ["Contábil", "Fiscal", "Departamento Pessoal"],
     soc: soc.length ? soc : [{ n: "", cpf: "", p: "", fn: "Sócio-administrador", ct: "" }]
   };
 }
 
 function parseBrasilAPI(d) {
-  const endParts = [];
-  if (d.descricao_tipo_de_logradouro && d.logradouro) {
-    endParts.push(`${d.descricao_tipo_de_logradouro} ${d.logradouro}`);
-  } else if (d.logradouro) {
-    endParts.push(d.logradouro);
-  }
-  if (d.numero) endParts.push(`nº ${d.numero}`);
-  if (d.complemento) endParts.push(d.complemento);
-  if (d.bairro) endParts.push(d.bairro);
-  if (d.municipio && d.uf) endParts.push(`${d.municipio}/${d.uf}`);
-  if (d.cep) endParts.push(`CEP ${d.cep}`);
-
   let reg = "Simples Nacional";
   if (d.opcao_pelo_mei) reg = "MEI";
   else if (d.opcao_pelo_simples) reg = "Simples Nacional";
@@ -504,16 +727,24 @@ function parseBrasilAPI(d) {
   }));
 
   const cnaesSec = (d.cnaes_secundarios || []).map(c => `${c.codigo} · ${c.descricao}`).slice(0, 6).join("; ");
+  const logradouro = d.descricao_tipo_de_logradouro && d.logradouro ? `${d.descricao_tipo_de_logradouro} ${d.logradouro}` : (d.logradouro || "");
 
   return {
     raz: d.razao_social || "",
     fan: d.nome_fantasia || d.razao_social || "",
     cnpj: formatCNPJ(d.cnpj),
     situacao: d.descricao_situacao_cadastral || "Ativa",
+    status_cliente: "Ativo",
     ini: (d.data_inicio_atividade || "").slice(0, 7),
     nat: `${d.codigo_natureza_juridica ? d.codigo_natureza_juridica + ' · ' : ''}${d.natureza_juridica || ''}`,
     porte: d.porte || "Demais",
-    end: endParts.join(", "),
+    end_cep: formatCEP(d.cep),
+    end_logradouro: logradouro,
+    end_numero: d.numero || "S/N",
+    end_complemento: d.complemento || "",
+    end_bairro: d.bairro || "",
+    end_cidade: d.municipio || "",
+    end_uf: d.uf || "",
     tel: d.ddd_telefone_1 || "",
     mail: (d.email || "").toLowerCase(),
     cnae: d.cnae_fiscal ? `${d.cnae_fiscal} · ${d.cnae_fiscal_descricao || ''}` : "",
@@ -521,6 +752,7 @@ function parseBrasilAPI(d) {
     ie: "",
     im: "",
     reg,
+    demandas: ["Contábil", "Fiscal", "Departamento Pessoal"],
     soc: soc.length ? soc : [{ n: "", cpf: "", p: "", fn: "Sócio-administrador", ct: "" }]
   };
 }
@@ -528,6 +760,55 @@ function parseBrasilAPI(d) {
 /* ==========================================================================
    3. BASE DE DADOS REAL E PERSISTÊNCIA DAS EMPRESAS
    ========================================================================== */
+function ensureCompanyAddressFields(c) {
+  if (!c) return;
+  if (!c.status_cliente) {
+    c.status_cliente = c.st === "Pausada" ? "Suspenso" : (c.st === "Encerrada" ? "Encerrado" : "Ativo");
+  }
+  if (!Array.isArray(c.demandas) || !c.demandas.length) {
+    c.demandas = ["Contábil", "Fiscal", "Departamento Pessoal"];
+  }
+  if (!c.end_logradouro && c.end) {
+    const raw = c.end;
+    const cepMatch = raw.match(/CEP\s*([\d.-]+)/i);
+    if (cepMatch) c.end_cep = cepMatch[1].replace(/\D/g, "").replace(/^(\d{5})(\d{3})$/, "$1-$2");
+
+    const cityMatch = raw.match(/·\s*([^·/]+)\/([A-Z]{2})/);
+    if (cityMatch) {
+      c.end_cidade = cityMatch[1].trim();
+      c.end_uf = cityMatch[2].trim();
+    }
+
+    const mainPart = raw.split("·")[0].trim();
+    const commaParts = mainPart.split(",").map(p => p.trim());
+    if (commaParts.length >= 1) c.end_logradouro = commaParts[0];
+    if (commaParts.length >= 2) c.end_numero = commaParts[1].replace(/nº\s*/i, "");
+    if (commaParts.length >= 3) c.end_complemento = commaParts.slice(2).join(", ");
+  }
+  if (!c.end_cep) c.end_cep = "";
+  if (!c.end_logradouro) c.end_logradouro = "";
+  if (!c.end_numero) c.end_numero = "";
+  if (!c.end_complemento) c.end_complemento = "";
+  if (!c.end_bairro) c.end_bairro = "";
+  if (!c.end_cidade) c.end_cidade = "";
+  if (!c.end_uf) c.end_uf = "";
+}
+
+function formatFullAddress(c) {
+  if (!c) return "—";
+  const parts = [];
+  if (c.end_logradouro) {
+    let p = c.end_logradouro;
+    if (c.end_numero) p += ", " + c.end_numero;
+    if (c.end_complemento) p += " (" + c.end_complemento + ")";
+    parts.push(p);
+  }
+  if (c.end_bairro) parts.push(c.end_bairro);
+  if (c.end_cidade || c.end_uf) parts.push(`${c.end_cidade || ''}/${c.end_uf || ''}`);
+  if (c.end_cep) parts.push(`CEP ${c.end_cep}`);
+  return parts.length ? parts.join(" · ") : (c.end || "—");
+}
+
 const INITIAL_COMPANIES = [
   {
     id: 101,
@@ -537,11 +818,18 @@ const INITIAL_COMPANIES = [
     seg: "E-commerce",
     reg: "Simples Nacional",
     st: "Ativa",
+    status_cliente: "Ativo",
     ini: "2022-03",
     nat: "206-2 · Sociedade empresária limitada",
     ie: "003456789.00-12",
     im: "4102938",
-    end: "Av. Afonso Pena, 1500, sala 402 · Belo Horizonte/MG · CEP 30130-005",
+    end_cep: "30130-005",
+    end_logradouro: "Av. Afonso Pena",
+    end_numero: "1500",
+    end_complemento: "sala 402",
+    end_bairro: "Centro",
+    end_cidade: "Belo Horizonte",
+    end_uf: "MG",
     tel: "(31) 3244-8899",
     mail: "financeiro@lumecosmeticos.com.br",
     cnae: "4772-5/00 · Comércio varejista de cosméticos e higiene pessoal",
@@ -557,7 +845,7 @@ const INITIAL_COMPANIES = [
       { cid: "crd-1-2", o: "Prefeitura", s: "Portal BHISS", link: "https://bhissdigital.pbh.gov.br", u: "4102938", pw: "Bhiss#2026", sit: "Ativo", obs: "NFS-e municipal" },
       { cid: "crd-1-3", o: "e-CAC", s: "e-CAC Receita Federal", link: "https://cav.receita.fazenda.gov.br", u: "Procuração eletrônica", pw: "Certificado", sit: "Ativo", obs: "Procuração válida até 2027" }
     ],
-    obrig: { ativas: ["das", "dctfweb", "reinf", "nfse"], apuracao: "Competência", notas: "Faturamento via Bling ERP" },
+    demandas: ["Contábil", "Fiscal", "Departamento Pessoal"],
     compl: { faturamento_medio: "R$ 140.000,00", colaboradores_qtd: "4", contato_principal: "Marina Alves (Diretora)", obs_internas: "Cliente pontual, fechamento até o 5º dia útil" }
   },
   {
@@ -568,11 +856,18 @@ const INITIAL_COMPANIES = [
     seg: "Dropshipping",
     reg: "Lucro Presumido",
     st: "Ativa",
+    status_cliente: "Ativo",
     ini: "2021-08",
     nat: "206-2 · Sociedade empresária limitada",
     ie: "109887234.11-00",
     im: "5582910",
-    end: "Rua Gomes de Carvalho, 1666, cj 82 · São Paulo/SP · CEP 04547-006",
+    end_cep: "04547-006",
+    end_logradouro: "Rua Gomes de Carvalho",
+    end_numero: "1666",
+    end_complemento: "cj 82",
+    end_bairro: "Vila Olímpia",
+    end_cidade: "São Paulo",
+    end_uf: "SP",
     tel: "(11) 3045-7788",
     mail: "contato@orbitdropship.com.br",
     cnae: "4619-2/00 · Representantes comerciais e agentes do comércio",
@@ -585,8 +880,8 @@ const INITIAL_COMPANIES = [
       { cid: "crd-2-0", o: "GOV.BR", s: "Gov.br PJ", link: "https://www.gov.br", u: "42.890.112/0001-30", pw: "GovOrbit!24", sit: "Ativo", obs: "Conta Ouro" },
       { cid: "crd-2-1", o: "e-CAC", s: "e-CAC RFB", link: "https://cav.receita.fazenda.gov.br", u: "Certificado digital", pw: "Cert#2026", sit: "Ativo", obs: "Acesso direto" }
     ],
-    obrig: { ativas: ["dctfweb", "reinf", "sped_fiscal", "sped_contrib", "esocial"], apuracao: "Competência", notas: "Intermediação de negócios digitais" },
-    compl: { faturamento_medio: "R$ 280.000,00", colaboradores_qtd: "2", contato_principal: "Henrique Costa", obs_internas: "Exige envio mensal do Dacon e extratos" }
+    demandas: ["Contábil", "Fiscal", "Consultoria"],
+    compl: { faturamento_medio: "R$ 280.000,00", colaboradores_qtd: "2", contato_principal: "Henrique Costa", obs_internas: "Exige envio mensal de extratos" }
   },
   {
     id: 103,
@@ -595,12 +890,19 @@ const INITIAL_COMPANIES = [
     cnpj: "38.552.910/0001-94",
     seg: "Infoprodutos",
     reg: "Simples Nacional",
-    st: "Ativa",
+    st: "Pausada",
+    status_cliente: "Suspenso",
     ini: "2023-01",
     nat: "206-2 · Sociedade empresária limitada",
     ie: "Isento",
     im: "7710294",
-    end: "Av. Rio Branco, 115, sala 901 · Rio de Janeiro/RJ · CEP 20040-004",
+    end_cep: "20040-004",
+    end_logradouro: "Av. Rio Branco",
+    end_numero: "115",
+    end_complemento: "sala 901",
+    end_bairro: "Centro",
+    end_cidade: "Rio de Janeiro",
+    end_uf: "RJ",
     tel: "(21) 2233-4455",
     mail: "adm@verticecursos.com.br",
     cnae: "8599-6/04 · Treinamento em desenvolvimento profissional",
@@ -614,12 +916,14 @@ const INITIAL_COMPANIES = [
       { cid: "crd-3-0", o: "GOV.BR", s: "Gov.br Corporativo", link: "https://www.gov.br", u: "38.552.910/0001-94", pw: "VerticeGov26", sit: "Ativo", obs: "" },
       { cid: "crd-3-1", o: "Prefeitura", s: "Nota Carioca", link: "https://notacarioca.rio.gov.br", u: "7710294", pw: "Rio#Vertice26", sit: "Ativo", obs: "Emissão de notas Hotmart" }
     ],
-    obrig: { ativas: ["das", "dctfweb", "nfse"], apuracao: "Competência", notas: "Vendas via Hotmart e Eduzz" },
+    demandas: ["Contábil", "Fiscal", "Legalização"],
     compl: { faturamento_medio: "R$ 95.000,00", colaboradores_qtd: "1", contato_principal: "Paula Nogueira", obs_internas: "Certificado digital venceu; cliente notificado" }
   }
 ];
 
 let C = getStored("companies", INITIAL_COMPANIES);
+// Garante migração transparente de endereços e status em todos os registros
+C.forEach(ensureCompanyAddressFields);
 function saveCompanies() { setStored("companies", C); }
 
 const H = [
@@ -630,12 +934,13 @@ const H = [
 ];
 
 /* ==========================================================================
-   4. NOVO MÓDULO — CERTIFICADOS AVULSOS (REQUISITO 6)
+   4. NOVO MÓDULO — CERTIFICADOS AVULSOS (COM CPF/CNPJ DO TITULAR)
    ========================================================================== */
 const DEFAULT_SINGLE_CERTS = [
   {
     id: "sc-201",
-    nome: "Marcos Paulo Pereira (MEI Serviços)",
+    nome: "Marcos Paulo Pereira",
+    cpf_cnpj: "24.551.982/0001-09",
     tipo: "e-CNPJ A1 (arquivo)",
     val: iso(35),
     pw: "Mpaulo#2026",
@@ -643,7 +948,8 @@ const DEFAULT_SINGLE_CERTS = [
   },
   {
     id: "sc-202",
-    nome: "Dra. Juliana Mendes da Silva (Médica)",
+    nome: "Dra. Juliana Mendes da Silva",
+    cpf_cnpj: "109.845.221-88",
     tipo: "e-CPF A1 (arquivo)",
     val: iso(-8),
     pw: "Jmendes!2026",
@@ -652,6 +958,7 @@ const DEFAULT_SINGLE_CERTS = [
   {
     id: "sc-203",
     nome: "Transportes Ramos MEI",
+    cpf_cnpj: "31.902.441/0001-44",
     tipo: "e-CNPJ A3 (token)",
     val: iso(195),
     pw: "Ramos@Token26",
@@ -659,7 +966,8 @@ const DEFAULT_SINGLE_CERTS = [
   },
   {
     id: "sc-204",
-    nome: "Carlos Eduardo Santos Consultoria",
+    nome: "Carlos Eduardo Santos",
+    cpf_cnpj: "089.442.110-34",
     tipo: "e-CPF A3 (token)",
     val: iso(50),
     pw: "Cadu#2026",
@@ -686,12 +994,14 @@ function openSingleCertModal(id = null) {
     const sc = SINGLE_CERTS.find(x => String(x.id) === String(id));
     if (sc) {
       $("#single-cert-name").value = sc.nome || "";
+      $("#single-cert-cpf-cnpj").value = sc.cpf_cnpj || "";
       $("#single-cert-type").value = sc.tipo || "e-CNPJ A1 (arquivo)";
       $("#single-cert-val").value = sc.val || "";
       $("#single-cert-pwd").value = sc.pw || "";
     }
   } else {
     $("#single-cert-name").value = "";
+    $("#single-cert-cpf-cnpj").value = "";
     $("#single-cert-type").value = "e-CNPJ A1 (arquivo)";
     $("#single-cert-val").value = "";
     $("#single-cert-pwd").value = "";
@@ -712,12 +1022,13 @@ function toggleSingleCertModalPwd(btn) {
 async function saveSingleCert() {
   const id = $("#single-cert-id").value;
   const nome = ($("#single-cert-name").value || "").trim();
+  const cpf_cnpj = formatCPFCNPJ($("#single-cert-cpf-cnpj").value);
   const tipo = $("#single-cert-type").value;
   const val = $("#single-cert-val").value;
   const pw = $("#single-cert-pwd").value;
 
   if (!nome) {
-    toast("Informe o nome do certificado/cliente.");
+    toast("Informe o nome do titular ou do certificado.");
     $("#single-cert-name").focus();
     return;
   }
@@ -736,6 +1047,7 @@ async function saveSingleCert() {
     const idx = SINGLE_CERTS.findIndex(x => String(x.id) === String(id));
     if (idx >= 0) {
       SINGLE_CERTS[idx].nome = nome;
+      SINGLE_CERTS[idx].cpf_cnpj = cpf_cnpj;
       SINGLE_CERTS[idx].tipo = tipo;
       SINGLE_CERTS[idx].val = val;
       SINGLE_CERTS[idx].pw = pw;
@@ -746,13 +1058,14 @@ async function saveSingleCert() {
     const newSc = {
       id: "sc-" + Date.now(),
       nome,
+      cpf_cnpj,
       tipo,
       val,
       pw,
       created_at: new Date().toISOString()
     };
     SINGLE_CERTS.unshift(newSc);
-    recordAudit("create_single_cert", "Cadastrou certificado avulso", "single_certificate", nome, `Novo certificado avulso para cliente não recorrente`);
+    recordAudit("create_single_cert", "Cadastrou certificado avulso", "single_certificate", nome, `Novo certificado avulso cadastrado`);
     toast("Certificado avulso cadastrado com sucesso!");
   }
 
@@ -788,7 +1101,7 @@ function singleCertsView() {
 
   const q = (SCF.q || "").toLowerCase();
   let list = SINGLE_CERTS.filter(sc => {
-    const matchQ = !q || sc.nome.toLowerCase().includes(q);
+    const matchQ = !q || sc.nome.toLowerCase().includes(q) || (sc.cpf_cnpj && sc.cpf_cnpj.toLowerCase().includes(q));
     const matchTipo = !SCF.tipo || sc.tipo === SCF.tipo;
     const matchSit = !SCF.sit || scStatus(sc) === SCF.sit;
     return matchQ && matchTipo && matchSit;
@@ -827,7 +1140,7 @@ function singleCertsView() {
     </div>
 
     <div class="fb" style="margin-top:20px">
-      <input placeholder="Buscar por nome do cliente ou certificado" value="${esc(SCF.q)}" oninput="SCF.q=this.value;singleCertsView()">
+      <input placeholder="Buscar por nome do cliente ou CPF/CNPJ" value="${esc(SCF.q)}" oninput="SCF.q=this.value;singleCertsView()">
       <select onchange="SCF.tipo=this.value;singleCertsView()">
         <option value="">Todos os tipos</option>
         <option value="e-CNPJ A1 (arquivo)" ${SCF.tipo === 'e-CNPJ A1 (arquivo)' ? 'selected' : ''}>e-CNPJ A1 (arquivo)</option>
@@ -849,6 +1162,7 @@ function singleCertsView() {
         <thead>
           <tr>
             <th>Nome do Certificado / Titular</th>
+            <th>CPF / CNPJ</th>
             <th>Tipo</th>
             <th>Validade</th>
             <th style="width:160px">Vigência</th>
@@ -861,16 +1175,17 @@ function singleCertsView() {
           ${list.length ? list.map(sc => `
             <tr>
               <td><b>${esc(sc.nome)}</b></td>
+              <td><span class="s mu" style="font-family:monospace">${esc(sc.cpf_cnpj || '—')}</span></td>
               <td><span class="p mu">${esc(sc.tipo)}</span></td>
               <td><b>${fd(sc.val)}</b></td>
               <td><div class="tr"><i style="width:${scWidth(sc)}%;background:var(--${scStatus(sc)})"></i></div></td>
               <td>${pill(scLabel(sc), scStatus(sc))}</td>
               <td>
                 <div style="display:flex;align-items:center;gap:4px">
-                  <input type="password" readonly value="${esc(sc.pw)}" style="width:110px;padding:3px 6px;font-size:12px;background:var(--bg)">
+                  <input type="password" readonly value="${esc(sc.pw)}" style="width:100px;padding:3px 6px;font-size:12px;background:var(--bg)">
                   ${hasPerm("credentials_reveal") ? `
-                    <a class="lk" onclick="revealSingleCertPwd(this, '${sc.id}')">Ver</a>
-                    <a class="lk" onclick="copySecret('${esc(sc.pw)}', '${esc(sc.nome)} · Certificado Avulso')">Copiar</a>
+                    <button class="discrete-action-btn" onclick="revealSingleCertPwd(this, '${sc.id}')" title="Revelar senha">👁</button>
+                    <button class="discrete-action-btn copy" onclick="copySecret('${esc(sc.pw)}', '${esc(sc.nome)} · Certificado Avulso')" title="Copiar senha">📋</button>
                   ` : `<span class="mu s">[Oculto]</span>`}
                 </div>
               </td>
@@ -879,7 +1194,7 @@ function singleCertsView() {
                 <button class="btn sm er" onclick="deleteSingleCert('${sc.id}')" title="Excluir certificado" style="margin-left:4px">Excluir</button>
               </td>
             </tr>
-          `).join("") : `<tr><td colspan="7" class="mu" style="padding:16px">Nenhum certificado avulso encontrado.</td></tr>`}
+          `).join("") : `<tr><td colspan="8" class="mu" style="padding:16px">Nenhum certificado avulso encontrado.</td></tr>`}
         </tbody>
       </table>
     </div>
@@ -894,7 +1209,7 @@ function revealSingleCertPwd(el, scId) {
   const input = el.parentElement.querySelector("input");
   const isPass = input.type === "password";
   input.type = isPass ? "text" : "password";
-  el.textContent = isPass ? "Ocultar" : "Ver";
+  el.textContent = isPass ? "🔒" : "👁";
   if (isPass) {
     const sc = SINGLE_CERTS.find(x => String(x.id) === String(scId));
     recordAudit("reveal", "Revelou senha", "single_certificate", sc ? sc.nome : "Certificado Avulso", "Visualizou senha de certificado avulso");
@@ -902,7 +1217,7 @@ function revealSingleCertPwd(el, scId) {
 }
 
 /* ==========================================================================
-   5. CADASTRO DE EMPRESAS POR ETAPAS (WIZARD - REQUISITO 1)
+   5. CADASTRO DE EMPRESAS POR ETAPAS (WIZARD COM DEMANDA CONTRATADA)
    ========================================================================== */
 let wizardStep = 1;
 let wizardData = null;
@@ -915,12 +1230,19 @@ const blankCompany = () => ({
   seg: SEGMENTS[0] || "E-commerce",
   reg: REG[0],
   st: "Ativa",
+  status_cliente: "Ativo",
   ini: T0.toISOString().slice(0, 7),
   nat: "206-2 · Sociedade empresária limitada",
   porte: "Demais",
   ie: "",
   im: "",
-  end: "",
+  end_cep: "",
+  end_logradouro: "",
+  end_numero: "",
+  end_complemento: "",
+  end_bairro: "",
+  end_cidade: "",
+  end_uf: "",
   tel: "",
   mail: "",
   cnae: "",
@@ -935,7 +1257,8 @@ const blankCompany = () => ({
     { cid: "crd-new-4", o: "FGTS", s: "Conectividade Social", link: "https://conectividadesocialv2.caixa.gov.br", u: "", pw: "", sit: "Pendente", obs: "Perfil empregador" },
     { cid: "crd-new-5", o: "Banco", s: "Internet Banking PJ", link: "", u: "", pw: "", sit: "Pendente", obs: "Acesso leitura extratos" }
   ],
-  obrig: { ativas: ["das", "dctfweb"], apuracao: "Competência", notas: "" },
+  demandas: ["Contábil", "Fiscal", "Departamento Pessoal"],
+  demandas_obs: "",
   compl: { faturamento_medio: "", colaboradores_qtd: "", contato_principal: "", obs_internas: "" }
 });
 
@@ -948,7 +1271,9 @@ function getStepValidation(step, d = wizardData) {
     if (!d.fan || !d.fan.trim()) miss.push("Nome Fantasia");
     if (!d.seg) miss.push("Segmento");
     if (!d.reg) miss.push("Regime Tributário");
-    if (!d.end || !d.end.trim()) miss.push("Endereço Completo");
+    if (!d.end_logradouro || !d.end_logradouro.trim()) miss.push("Logradouro / Rua");
+    if (!d.end_cidade || !d.end_cidade.trim()) miss.push("Cidade");
+    if (!d.end_uf || !d.end_uf.trim()) miss.push("UF");
     return { ok: miss.length === 0, missing: miss };
   }
   if (step === 2) {
@@ -970,8 +1295,8 @@ function getStepValidation(step, d = wizardData) {
     return { ok: miss.length === 0, missing: miss };
   }
   if (step === 5) {
-    if (!d.obrig || !d.obrig.ativas || !d.obrig.ativas.length) {
-      miss.push("Pelo menos 1 obrigação fiscal selecionada");
+    if (!d.demandas || !d.demandas.length) {
+      miss.push("Pelo menos 1 demanda contratada selecionada");
     }
     return { ok: miss.length === 0, missing: miss };
   }
@@ -1014,6 +1339,7 @@ function initWizard() {
   const draft = getStored("company_draft", null);
   if (draft && draft.data) {
     wizardData = draft.data;
+    ensureCompanyAddressFields(wizardData);
     wizardStep = draft.step || 1;
   } else {
     wizardData = blankCompany();
@@ -1025,7 +1351,9 @@ function goToWizardStep(targetStep) {
   saveWizardDraft(false);
   wizardStep = Math.max(1, Math.min(6, targetStep));
   renderWizard();
-  window.scrollTo({ top: 0, behavior: "smooth" });
+  if (typeof window !== "undefined" && typeof window.scrollTo === "function") {
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
 }
 
 async function handleCNPJLookupWizard() {
@@ -1054,7 +1382,14 @@ async function handleCNPJLookupWizard() {
     wizardData.fan = data.fan;
     if (data.ini) wizardData.ini = data.ini;
     if (data.nat) wizardData.nat = data.nat;
-    if (data.end) wizardData.end = data.end;
+    if (data.porte) wizardData.porte = data.porte;
+    if (data.end_cep) wizardData.end_cep = data.end_cep;
+    if (data.end_logradouro) wizardData.end_logradouro = data.end_logradouro;
+    if (data.end_numero) wizardData.end_numero = data.end_numero;
+    if (data.end_complemento) wizardData.end_complemento = data.end_complemento;
+    if (data.end_bairro) wizardData.end_bairro = data.end_bairro;
+    if (data.end_cidade) wizardData.end_cidade = data.end_cidade;
+    if (data.end_uf) wizardData.end_uf = data.end_uf;
     if (data.tel) wizardData.tel = data.tel;
     if (data.mail) wizardData.mail = data.mail;
     if (data.cnae) wizardData.cnae = data.cnae;
@@ -1073,6 +1408,23 @@ async function handleCNPJLookupWizard() {
   }
 }
 
+async function handleCEPLookupWizard(input) {
+  const digits = input.value.replace(/\D/g, "");
+  if (digits.length === 8) {
+    toast("Buscando endereço pelo CEP...");
+    const addr = await lookupCEP(digits);
+    if (addr && wizardData) {
+      if (addr.logradouro && !wizardData.end_logradouro) wizardData.end_logradouro = addr.logradouro;
+      if (addr.bairro && !wizardData.end_bairro) wizardData.end_bairro = addr.bairro;
+      if (addr.cidade) wizardData.end_cidade = addr.cidade;
+      if (addr.uf) wizardData.end_uf = addr.uf;
+      autoSaveDraft();
+      renderWizard();
+      toast("Endereço preenchido pelo CEP!");
+    }
+  }
+}
+
 function renderWizard() {
   if (!wizardData) initWizard();
   const d = wizardData;
@@ -1082,12 +1434,9 @@ function renderWizard() {
     { num: 2, label: "Sócios" },
     { num: 3, label: "Certificado Digital" },
     { num: 4, label: "Acessos e Credenciais" },
-    { num: 5, label: "Obrigações Fiscais" },
+    { num: 5, label: "Demanda Contratada" },
     { num: 6, label: "Validação & Conclusão" }
   ];
-
-  const validation = getStepValidation(wizardStep, d);
-  const overallValidation = getStepValidation(6, d);
 
   $("#v").innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:10px">
@@ -1157,10 +1506,10 @@ function renderWizardStepContent(step, d) {
 
       <div class="fl" style="margin-top:16px">
         <label class="fi" style="grid-column:span 2">
-          <span>CNPJ * (Preenchimento Automático)</span>
+          <span>CNPJ * (Consulta Automática)</span>
           <div class="input-with-action">
             <input id="wiz-cnpj" data-wp="cnpj" value="${esc(d.cnpj || '')}" placeholder="00.000.000/0000-00" maxlength="18">
-            <button type="button" class="btn sm pr" onclick="handleCNPJLookupWizard()" title="Buscar na Receita Federal">
+            <button type="button" class="btn sm pr" onclick="handleCNPJLookupWizard()" title="Buscar dados na Receita Federal">
               🔍 Consultar CNPJ
             </button>
           </div>
@@ -1168,8 +1517,10 @@ function renderWizardStepContent(step, d) {
         </label>
 
         <label class="fi">
-          <span>Início de Atendimento</span>
-          <input type="month" data-wp="ini" value="${esc(d.ini || '')}">
+          <span>Status do Cliente *</span>
+          <select data-wp="status_cliente">
+            ${STATUS_CLIENTE_OPTS.map(st => `<option value="${esc(st)}" ${st === (d.status_cliente || 'Ativo') ? 'selected' : ''}>● ${esc(st)}</option>`).join("")}
+          </select>
         </label>
 
         <label class="fi" style="grid-column:span 2">
@@ -1188,7 +1539,7 @@ function renderWizardStepContent(step, d) {
             <select data-wp="seg" id="wiz-seg-select">
               ${SEGMENTS.map(s => `<option value="${esc(s)}" ${s === d.seg ? 'selected' : ''}>${esc(s)}</option>`).join("")}
             </select>
-            <button type="button" class="btn sm" onclick="openAddSegmentModal('wiz-seg-select')" title="Cadastrar novo segmento" style="font-size:16px;font-weight:bold;line-height:1">+</button>
+            <button type="button" class="btn sm" onclick="openManageSegmentsModal()" title="Gerenciar segmentos" style="font-size:16px;font-weight:bold;line-height:1">+</button>
           </div>
         </label>
 
@@ -1200,16 +1551,49 @@ function renderWizardStepContent(step, d) {
         </label>
 
         <label class="fi">
-          <span>Status da Empresa</span>
-          <select data-wp="st">
-            ${STS.map(s => `<option value="${esc(s)}" ${s === d.st ? 'selected' : ''}>${esc(s)}</option>`).join("")}
-          </select>
+          <span>Início de Atendimento</span>
+          <input type="month" data-wp="ini" value="${esc(d.ini || '')}">
         </label>
 
-        <label class="fi" style="grid-column:span 2">
-          <span>Endereço Completo *</span>
-          <input data-wp="end" value="${esc(d.end || '')}" placeholder="Rua, número, complemento, bairro, cidade/UF e CEP">
-        </label>
+        <!-- ENDEREÇO SEPARADO POR CAMPOS INDIVIDUAIS -->
+        <div style="grid-column:span 3;margin-top:8px;padding-top:12px;border-top:1px solid var(--bd)">
+          <h3 style="font-size:13px;font-weight:700;color:var(--tx);margin-bottom:10px">Endereço Completo:</h3>
+          <div class="address-fields-grid">
+            <label class="fi">
+              <span>CEP</span>
+              <input data-wp="end_cep" value="${esc(d.end_cep || '')}" placeholder="00000-000" maxlength="9" onblur="handleCEPLookupWizard(this)">
+            </label>
+            <label class="fi">
+              <span>Rua / Logradouro *</span>
+              <input data-wp="end_logradouro" value="${esc(d.end_logradouro || '')}" placeholder="Avenida, rua, travessa...">
+            </label>
+            <label class="fi">
+              <span>Número</span>
+              <input data-wp="end_numero" value="${esc(d.end_numero || '')}" placeholder="Ex: 120 ou S/N">
+            </label>
+            <label class="fi">
+              <span>Complemento</span>
+              <input data-wp="end_complemento" value="${esc(d.end_complemento || '')}" placeholder="Sala, bloco, andar...">
+            </label>
+          </div>
+          <div class="address-fields-grid" style="margin-top:10px">
+            <label class="fi">
+              <span>Bairro</span>
+              <input data-wp="end_bairro" value="${esc(d.end_bairro || '')}" placeholder="Bairro">
+            </label>
+            <label class="fi">
+              <span>Cidade *</span>
+              <input data-wp="end_cidade" value="${esc(d.end_cidade || '')}" placeholder="Município">
+            </label>
+            <label class="fi">
+              <span>UF *</span>
+              <input data-wp="end_uf" value="${esc(d.end_uf || '')}" placeholder="UF" maxlength="2" style="text-transform:uppercase">
+            </label>
+            <div style="display:flex;align-items:flex-end">
+              <span class="s mu" style="margin-bottom:8px">ℹ️ CEP preenche cidade e UF automaticamente.</span>
+            </div>
+          </div>
+        </div>
 
         <label class="fi">
           <span>Natureza Jurídica</span>
@@ -1221,7 +1605,7 @@ function renderWizardStepContent(step, d) {
           <input data-wp="tel" value="${esc(d.tel || '')}" placeholder="(00) 00000-0000">
         </label>
 
-        <label class="fi" style="grid-column:span 2">
+        <label class="fi">
           <span>E-mail Corporativo</span>
           <input type="email" data-wp="mail" value="${esc(d.mail || '')}" placeholder="contato@empresa.com.br">
         </label>
@@ -1296,7 +1680,7 @@ function renderWizardStepContent(step, d) {
       <div class="hh">
         <div>
           <h2>Etapa 3 · Certificado Digital</h2>
-          <p class="sub" style="margin-bottom:0">Conforme o padrão Nortis, mantenha exclusivamente Tipo, Validade e Senha.</p>
+          <p class="sub" style="margin-bottom:0">Mantenha exclusivamente Tipo, Validade e Senha, garantindo conformidade e segurança.</p>
         </div>
       </div>
 
@@ -1327,7 +1711,7 @@ function renderWizardStepContent(step, d) {
       </div>
 
       <div class="al wn" style="margin-top:24px;font-size:12px">
-        ℹ️ <b>Segurança Nortis:</b> Senhas de certificados são protegidas e auditadas. Apenas colaboradores autorizados têm permissão para revelar senhas.
+        🔒 <b>Segurança Nortis:</b> Senhas de certificados são criptografadas e protegidas. Visualização restrita a usuários autorizados.
       </div>
     `;
   }
@@ -1337,7 +1721,7 @@ function renderWizardStepContent(step, d) {
       <div class="hh">
         <div>
           <h2>Etapa 4 · Acessos e Credenciais</h2>
-          <p class="sub" style="margin-bottom:0">Credenciais com link direto clicável para abertura rápida dos sistemas dos órgãos.</p>
+          <p class="sub" style="margin-bottom:0">Credenciais com link direto para consulta rápida dos sistemas e portais oficiais.</p>
         </div>
         <button type="button" class="btn sm pr" onclick="addWizardRow('ac')">+ Adicionar Acesso</button>
       </div>
@@ -1370,7 +1754,7 @@ function renderWizardStepContent(step, d) {
                   ${a.link ? `<a href="${esc(a.link)}" target="_blank" rel="noopener noreferrer" class="btn-icon-link" title="Abrir link em nova aba">↗</a>` : ''}
                 </div>
               </td>
-              <td><input data-wp="ac.${k}.u" value="${esc(a.u || '')}" placeholder="Identificador"></td>
+              <td><input data-wp="ac.${k}.u" value="${esc(a.u || '')}" placeholder="Login/Usuário"></td>
               <td>
                 <div style="display:flex;align-items:center;gap:4px">
                   <input type="password" data-wp="ac.${k}.pw" value="${esc(a.pw || '')}" placeholder="Senha/token">
@@ -1392,48 +1776,36 @@ function renderWizardStepContent(step, d) {
   }
 
   if (step === 5) {
-    const ativas = (d.obrig && d.obrig.ativas) ? d.obrig.ativas : [];
+    const selecionadas = Array.isArray(d.demandas) ? d.demandas : [];
     return `
       <div class="hh">
         <div>
-          <h2>Etapa 5 · Obrigações e Configurações Fiscais</h2>
-          <p class="sub" style="margin-bottom:0">Selecione as obrigações acessórias aplicáveis à empresa conforme seu regime tributário.</p>
+          <h2>Etapa 5 · Demanda Contratada</h2>
+          <p class="sub" style="margin-bottom:0">Selecione as demandas e serviços contratados pelo cliente. Gerencie novas opções pelo botão "+".</p>
+        </div>
+        <button type="button" class="btn sm pr" onclick="openManageDemandsModal()" title="Gerenciar opções de demandas">+ Gerenciar Demandas</button>
+      </div>
+
+      <div style="margin-top:16px">
+        <label style="font-weight:700;color:var(--tx);font-size:13px;display:block;margin-bottom:8px">Demandas Selecionadas para esta Empresa *</label>
+        <div class="demand-chips-container">
+          ${DEMANDS.map(dm => {
+            const isSel = selecionadas.includes(dm);
+            return `
+              <div class="demand-chip ${isSel ? 'selected' : ''}" onclick="toggleWizardDemand('${esc(dm)}')">
+                <span>${isSel ? '✓' : '+'}</span>
+                <span>${esc(dm)}</span>
+              </div>
+            `;
+          }).join("")}
         </div>
       </div>
 
-      <div class="g2" style="margin-top:14px;align-items:flex-start">
-        <div>
-          <label style="font-weight:700;color:var(--tx);font-size:13px;display:block;margin-bottom:8px">Obrigações Contábeis & Fiscais Aplicáveis:</label>
-          <div class="tax-ob-grid">
-            ${DEFAULT_TAX_OBLIGATIONS.map(ob => {
-              const isChecked = ativas.includes(ob.id);
-              return `
-                <div class="tax-ob-card">
-                  <label>
-                    <input type="checkbox" ${isChecked ? 'checked' : ''} onchange="toggleWizardObligation('${ob.id}', this.checked)">
-                    <span>${esc(ob.name)}</span>
-                  </label>
-                  <span class="tax-due">Prazo: ${esc(ob.period)}</span>
-                </div>
-              `;
-            }).join("")}
-          </div>
-        </div>
-
-        <div>
-          <label class="fi" style="margin-bottom:14px">
-            <span>Regime de Apuração Fiscal</span>
-            <select data-wp="obrig.apuracao">
-              <option value="Competência" ${d.obrig && d.obrig.apuracao === 'Competência' ? 'selected' : ''}>Competência (Padrão)</option>
-              <option value="Caixa" ${d.obrig && d.obrig.apuracao === 'Caixa' ? 'selected' : ''}>Regime de Caixa</option>
-            </select>
-          </label>
-
-          <label class="fi">
-            <span>Configurações e Notas Fiscais Específicas</span>
-            <textarea data-wp="obrig.notas" rows="6" placeholder="Detalhes sobre emissores, alíquotas diferenciadas, retenções na fonte, particularidades da prefeitura...">${esc((d.obrig && d.obrig.notas) || '')}</textarea>
-          </label>
-        </div>
+      <div style="margin-top:20px;max-width:800px">
+        <label class="fi">
+          <span>Observações sobre o Escopo Contratado</span>
+          <textarea data-wp="demandas_obs" rows="4" placeholder="Particularidades do contrato, sistemas do cliente, rotinas de fechamento específicas...">${esc(d.demandas_obs || '')}</textarea>
+        </label>
       </div>
     `;
   }
@@ -1499,7 +1871,7 @@ function renderWizardStepContent(step, d) {
                 ${v4.ok ? `<span class="p ok">✓ Concluída</span>` : `<span class="p wn" title="${esc(v4.missing.join(', '))}">⚠️ Pendente</span>`}
               </div>
               <div style="display:flex;justify-content:space-between;align-items:center">
-                <span>5. Obrigações Fiscais</span>
+                <span>5. Demanda Contratada</span>
                 ${v5.ok ? `<span class="p ok">✓ Concluída</span>` : `<span class="p wn" title="${esc(v5.missing.join(', '))}">⚠️ Pendente</span>`}
               </div>
             </div>
@@ -1531,10 +1903,8 @@ function bindWizardEvents() {
     const p = t.dataset.wp;
     if (!p || !wizardData) return;
     
-    // Tratamento especial para máscara de CNPJ
-    if (p === "cnpj") {
-      t.value = formatCNPJ(t.value);
-    }
+    if (p === "cnpj") t.value = formatCNPJ(t.value);
+    if (p === "end_cep") t.value = formatCEP(t.value);
 
     setDeepValue(wizardData, p, t.value);
     autoSaveDraft();
@@ -1580,17 +1950,17 @@ function removeWizardRow(k, idx) {
   renderWizard();
 }
 
-function toggleWizardObligation(obId, isChecked) {
+function toggleWizardDemand(demandName) {
   if (!wizardData) return;
-  if (!wizardData.obrig) wizardData.obrig = { ativas: [], apuracao: "Competência", notas: "" };
-  if (!wizardData.obrig.ativas) wizardData.obrig.ativas = [];
-  
-  if (isChecked) {
-    if (!wizardData.obrig.ativas.includes(obId)) wizardData.obrig.ativas.push(obId);
+  if (!Array.isArray(wizardData.demandas)) wizardData.demandas = [];
+  const idx = wizardData.demandas.indexOf(demandName);
+  if (idx >= 0) {
+    wizardData.demandas.splice(idx, 1);
   } else {
-    wizardData.obrig.ativas = wizardData.obrig.ativas.filter(id => id !== obId);
+    wizardData.demandas.push(demandName);
   }
   autoSaveDraft();
+  renderWizard();
 }
 
 function autoSuggestPortalLink(selectEl, rowIndex) {
@@ -1629,6 +1999,7 @@ function submitFinishWizard() {
   const d = wizardData;
   d.fan = d.fan.trim() || d.raz.trim();
   d.id = Date.now();
+  ensureCompanyAddressFields(d);
 
   // Verifica duplicação de CNPJ
   const cleanCNPJ = d.cnpj.replace(/\D/g, "");
@@ -1652,14 +2023,13 @@ function submitFinishWizard() {
 }
 
 /* ==========================================================================
-   6. FICHA INDIVIDUAL DA EMPRESA (EDIÇÃO POR ABAS - REQUISITOS 1, 2, 3, 5, 7)
+   6. FICHA INDIVIDUAL DA EMPRESA (UX DE CONSULTA RÁPIDA - REQUISITO 3)
    ========================================================================== */
-let D = null, orig = null, dy = 0, cur = 0, currentCompanyTab = "dados";
+let D = null, orig = null, dy = 0, cur = 0, currentCompanyTab = "dados", isCompanyEditMode = false;
 
 const nm = id => C.find(c => String(c.id) === String(id));
 const ago = n => (n == 0 ? "hoje" : n == 1 ? "ontem" : "há " + n + " dias");
 const pill = (t, k) => `<span class="p ${k}">${t}</span>`;
-const stP = c => pill(c.st, c.st === "Ativa" ? "ok" : c.st === "Pausada" ? "mu" : "wn");
 const sitP = x => pill(x, x === "Ativo" ? "ok" : x === "Revisar" ? "wn" : "er");
 const dd = c => (c.cert && c.cert.val ? Math.round((new Date(c.cert.val + "T12:00") - T0) / 864e5) : null);
 const cs = c => { const n = dd(c); return n === null ? "mu" : n < 0 ? "er" : n <= 60 ? "wn" : "ok"; };
@@ -1669,29 +2039,46 @@ const cw = c => { const n = dd(c); return n === null ? 0 : Math.max(0, Math.min(
 
 const miss = c => {
   const m = [];
-  [["cnpj", "CNPJ"], ["ie", "Inscrição estadual"], ["im", "Inscrição municipal"], ["end", "Endereço"], ["tel", "Telefone"], ["mail", "E-mail"]].forEach(([k, l]) => {
+  [["cnpj", "CNPJ"], ["end_logradouro", "Endereço / Logradouro"], ["end_cidade", "Cidade"], ["tel", "Telefone"], ["mail", "E-mail"]].forEach(([k, l]) => {
     if (!c[k]) m.push(l);
   });
   if (!c.soc || !c.soc.some(s => s.n)) m.push("Sócios");
   if (!c.cert || !c.cert.val) m.push("Certificado digital");
-  const n = (c.ac || []).filter(a => !a.u).length;
-  if (n) m.push(n + " acesso(s) sem usuário");
+  if (!c.demandas || !c.demandas.length) m.push("Demandas contratadas");
   return m;
 };
 
 const get = p => p.split(".").reduce((o, z) => (o ? o[z] : ""), D);
-const I = (p, l, o = {}) => `<label class="fi"${o.w ? ` style="grid-column:span ${o.w}"` : ""}><span>${l}</span><input data-p="${p}"${o.t ? ` type="${o.t}"` : ""}${o.m ? ` data-m="1"` : ""}${o.r ? ` data-r="1"` : ""} value="${esc(get(p) || "")}" ${!hasPerm("companies_edit") ? "disabled" : ""}></label>`;
-const S = (p, l, a) => `<label class="fi"><span>${l}</span><select data-p="${p}" ${!hasPerm("companies_edit") ? "disabled" : ""}>${a.map(x => `<option ${x == get(p) ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label>`;
-const Ci = (p, t) => `<td><input data-p="${p}"${t ? ` type="${t}"` : ""} value="${esc(get(p) || "")}" ${!hasPerm("companies_edit") ? "disabled" : ""}></td>`;
-const Cs = (p, a) => `<td><select data-p="${p}" ${!hasPerm("companies_edit") ? "disabled" : ""}>${a.map(x => `<option ${x == get(p) ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></td>`;
+const I = (p, l, o = {}) => `<label class="fi"${o.w ? ` style="grid-column:span ${o.w}"` : ""}><span>${l}</span><input data-p="${p}"${o.t ? ` type="${o.t}"` : ""}${o.m ? ` data-m="1"` : ""}${o.r ? ` data-r="1"` : ""} value="${esc(get(p) || "")}"></label>`;
+const S = (p, l, a) => `<label class="fi"><span>${l}</span><select data-p="${p}">${a.map(x => `<option ${x == get(p) ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></label>`;
+const Ci = (p, t) => `<td><input data-p="${p}"${t ? ` type="${t}"` : ""} value="${esc(get(p) || "")}"></td>`;
+const Cs = (p, a) => `<td><select data-p="${p}">${a.map(x => `<option ${x == get(p) ? "selected" : ""}>${esc(x)}</option>`).join("")}</select></td>`;
 
 function switchCompanyTab(tabId) {
   currentCompanyTab = tabId;
   fic();
 }
 
+function updateCompanyStatusDirect(newStatus) {
+  if (!D) return;
+  D.status_cliente = newStatus;
+  dy = 1;
+  const elDy = $("#dy");
+  if (elDy) elDy.style.visibility = "visible";
+  sv();
+}
+
+function copyToClipboard(text, label) {
+  navigator.clipboard.writeText(text).then(() => {
+    toast(`${label || 'Texto'} copiado para a área de transferência!`);
+  }).catch(() => {
+    toast("Falha ao copiar automaticamente.");
+  });
+}
+
 function fic() {
   const c = D, ex = !!orig;
+  ensureCompanyAddressFields(c);
   const i = ex ? C.indexOf(orig) : 0;
   const pv = C[(i + C.length - 1) % C.length];
   const nx = C[(i + 1) % C.length];
@@ -1702,7 +2089,6 @@ function fic() {
     <div class="bar">
       <div>
         <p class="s mu"><a class="lk" style="margin:0" href="#empresas">Empresas</a> / ${esc(orig.fan)}</p>
-        <h1>${esc(orig.raz)}</h1>
       </div>
       <div class="sp"></div>
       <span id="dy" class="s wn" style="visibility:${dy ? "visible" : "hidden"}">Alterações não salvas</span>
@@ -1712,16 +2098,44 @@ function fic() {
       ${hasPerm("companies_edit") ? `<button class="btn pr" onclick="sv()">Salvar Alterações</button>` : ""}
     </div>
 
-    <p style="margin-bottom:12px">${stP(c)} ${pill(c.reg, "mu")} ${cp(c)}</p>
+    <!-- CABEÇALHO COMPACTO DE CONSULTA RÁPIDA (REQUISITO 3.1) -->
+    <div class="company-hero-card">
+      <div class="company-hero-main">
+        <div class="company-hero-title">
+          <span>${esc(orig.raz)}</span>
+          <span class="s mu" style="font-weight:600">(${esc(orig.fan)})</span>
+        </div>
+        <div class="company-hero-meta">
+          <span style="font-family:monospace;font-weight:700;color:var(--tx)">
+            CNPJ: ${esc(orig.cnpj || '—')}
+            ${orig.cnpj ? `<button class="discrete-action-btn copy" onclick="copyToClipboard('${esc(orig.cnpj)}', 'CNPJ')" title="Copiar CNPJ">📋</button>` : ''}
+          </span>
+          <span>·</span>
+          <span>Regime: <b>${esc(orig.reg || '—')}</b></span>
+          <span>·</span>
+          <span>Segmento: <b>${esc(orig.seg || '—')}</b></span>
+          <span>·</span>
+          <span>Certificado: ${cp(orig)}</span>
+        </div>
+      </div>
+      
+      <!-- Seletor Rápido de Status do Cliente (Ativo, Suspenso, Encerrado) -->
+      <div style="display:flex;align-items:center;gap:8px">
+        <span class="s mu">Status:</span>
+        <select onchange="updateCompanyStatusDirect(this.value)" style="font-size:12px;font-weight:700;padding:4px 8px;border-radius:99px;border-color:var(--bd);background:var(--cd);color:var(--tx)">
+          ${STATUS_CLIENTE_OPTS.map(st => `<option value="${esc(st)}" ${st === (orig.status_cliente || 'Ativo') ? 'selected' : ''}>● ${esc(st)}</option>`).join("")}
+        </select>
+      </div>
+    </div>
 
-    <!-- Navegação por Abas Individuais da Empresa -->
+    <!-- Navegação por Abas Organizadas -->
     <div class="chips">
       <a class="${currentCompanyTab === 'dados' ? 'on' : ''}" onclick="switchCompanyTab('dados')" style="${currentCompanyTab === 'dados' ? 'border-color:var(--pr);color:var(--tx)' : ''}">1. Dados Cadastrais</a>
       <a class="${currentCompanyTab === 'socios' ? 'on' : ''}" onclick="switchCompanyTab('socios')" style="${currentCompanyTab === 'socios' ? 'border-color:var(--pr);color:var(--tx)' : ''}">2. Sócios (${c.soc ? c.soc.length : 0})</a>
-      <a class="${currentCompanyTab === 'cert' ? 'on' : ''}" onclick="switchCompanyTab('cert')" style="${currentCompanyTab === 'cert' ? 'border-color:var(--pr);color:var(--tx)' : ''}">3. Certificado Digital</a>
-      <a class="${currentCompanyTab === 'acessos' ? 'on' : ''}" onclick="switchCompanyTab('acessos')" style="${currentCompanyTab === 'acessos' ? 'border-color:var(--pr);color:var(--tx)' : ''}">4. Acessos e Credenciais (${c.ac ? c.ac.length : 0})</a>
-      <a class="${currentCompanyTab === 'obrig' ? 'on' : ''}" onclick="switchCompanyTab('obrig')" style="${currentCompanyTab === 'obrig' ? 'border-color:var(--pr);color:var(--tx)' : ''}">5. Obrigações Fiscais</a>
-      <a class="${currentCompanyTab === 'compl' ? 'on' : ''}" onclick="switchCompanyTab('compl')" style="${currentCompanyTab === 'compl' ? 'border-color:var(--pr);color:var(--tx)' : ''}">6. Outros Dados</a>
+      <a class="${currentCompanyTab === 'demandas' ? 'on' : ''}" onclick="switchCompanyTab('demandas')" style="${currentCompanyTab === 'demandas' ? 'border-color:var(--pr);color:var(--tx)' : ''}">3. Demanda Contratada (${c.demandas ? c.demandas.length : 0})</a>
+      <a class="${currentCompanyTab === 'cert' ? 'on' : ''}" onclick="switchCompanyTab('cert')" style="${currentCompanyTab === 'cert' ? 'border-color:var(--pr);color:var(--tx)' : ''}">4. Certificado Digital</a>
+      <a class="${currentCompanyTab === 'acessos' ? 'on' : ''}" onclick="switchCompanyTab('acessos')" style="${currentCompanyTab === 'acessos' ? 'border-color:var(--pr);color:var(--tx)' : ''}">5. Credenciais e Acessos (${c.ac ? c.ac.length : 0})</a>
+      <a class="${currentCompanyTab === 'compl' ? 'on' : ''}" onclick="switchCompanyTab('compl')" style="${currentCompanyTab === 'compl' ? 'border-color:var(--pr);color:var(--tx)' : ''}">6. Informações Complementares</a>
       <a class="${currentCompanyTab === 'hist' ? 'on' : ''}" onclick="switchCompanyTab('hist')" style="${currentCompanyTab === 'hist' ? 'border-color:var(--pr);color:var(--tx)' : ''}">7. Histórico</a>
     </div>
 
@@ -1749,15 +2163,34 @@ function renderCompanyTabContent(tab, c, hs) {
               <select data-p="seg" id="company-seg-select">
                 ${SEGMENTS.map(s => `<option value="${esc(s)}" ${s === c.seg ? 'selected' : ''}>${esc(s)}</option>`).join("")}
               </select>
-              <button type="button" class="btn sm" onclick="openAddSegmentModal('company-seg-select')" title="Cadastrar novo segmento" style="font-size:16px;font-weight:bold;line-height:1">+</button>
+              <button type="button" class="btn sm" onclick="openManageSegmentsModal()" title="Gerenciar segmentos" style="font-size:16px;font-weight:bold;line-height:1">+</button>
             </div>
           </label>
           ${S("reg", "Regime tributário", REG)}
-          ${S("st", "Status", STS)}
+          ${S("status_cliente", "Status do Cliente", STATUS_CLIENTE_OPTS)}
           ${I("ini", "Início do atendimento", { t: "month" })}
           ${I("nat", "Natureza jurídica")}
           ${I("porte", "Porte")}
-          ${I("end", "Endereço completo", { w: 2 })}
+
+          <!-- Endereço Individualizado na Ficha -->
+          <div style="grid-column:span 3;margin-top:8px;padding-top:12px;border-top:1px solid var(--bd)">
+            <h3 style="font-size:13px;font-weight:700;color:var(--tx);margin-bottom:10px">Endereço da Empresa:</h3>
+            <div class="address-fields-grid">
+              ${I("end_cep", "CEP")}
+              ${I("end_logradouro", "Rua / Logradouro")}
+              ${I("end_numero", "Número")}
+              ${I("end_complemento", "Complemento")}
+            </div>
+            <div class="address-fields-grid" style="margin-top:10px">
+              ${I("end_bairro", "Bairro")}
+              ${I("end_cidade", "Cidade")}
+              ${I("end_uf", "UF")}
+              <div style="display:flex;align-items:flex-end">
+                <span class="s mu" style="margin-bottom:8px">Visualização consolidada: <b>${esc(formatFullAddress(c))}</b></span>
+              </div>
+            </div>
+          </div>
+
           ${I("tel", "Telefone")}
           ${I("mail", "E-mail corporativo", { w: 2 })}
           ${I("ie", "Inscrição estadual")}
@@ -1797,14 +2230,46 @@ function renderCompanyTabContent(tab, c, hs) {
     `;
   }
 
+  if (tab === "demandas") {
+    const selecionadas = Array.isArray(c.demandas) ? c.demandas : [];
+    return `
+      <div class="cd">
+        <div class="hh">
+          <h2>3. Demanda Contratada</h2>
+          <button type="button" class="btn sm pr" onclick="openManageDemandsModal()" title="Gerenciar demandas">+ Gerenciar Demandas</button>
+        </div>
+        <p class="sub">Selecione os serviços contábeis e fiscais ativos no contrato desta empresa:</p>
+        
+        <div class="demand-chips-container" style="margin-top:12px">
+          ${DEMANDS.map(dm => {
+            const isSel = selecionadas.includes(dm);
+            return `
+              <div class="demand-chip ${isSel ? 'selected' : ''}" onclick="toggleCompanyDemand('${esc(dm)}')">
+                <span>${isSel ? '✓' : '+'}</span>
+                <span>${esc(dm)}</span>
+              </div>
+            `;
+          }).join("")}
+        </div>
+
+        <div style="margin-top:20px;max-width:800px">
+          <label class="fi">
+            <span>Observações e Particularidades do Escopo Contratado</span>
+            <textarea data-p="demandas_obs" rows="4">${esc(c.demandas_obs || '')}</textarea>
+          </label>
+        </div>
+      </div>
+    `;
+  }
+
   if (tab === "cert") {
     return `
       <div class="cd">
         <div class="hh">
-          <h2>3. Certificado Digital</h2>
+          <h2>4. Certificado Digital</h2>
           ${cp(c)}
         </div>
-        <p class="sub">Conforme o padrão do sistema, esta seção mantém exclusivamente os 3 campos essenciais.</p>
+        <p class="sub">Mantém exclusivamente os 3 campos essenciais (Tipo, Validade e Senha).</p>
         <div class="fl" style="max-width:800px">
           ${S("cert.tipo", "Tipo", ["e-CNPJ A1 (arquivo)", "e-CNPJ A3 (token)", "e-CPF A1 (arquivo)", "e-CPF A3 (token)", "Outro"])}
           ${I("cert.val", "Validade", { t: "date", r: 1 })}
@@ -1813,8 +2278,8 @@ function renderCompanyTabContent(tab, c, hs) {
             <div style="display:flex;align-items:center;gap:6px">
               <input type="password" data-p="cert.pw" value="${esc(c.cert ? c.cert.pw : '')}" ${!hasPerm("companies_edit") ? "disabled" : ""}>
               ${hasPerm("credentials_reveal") ? `
-                <a class="lk" onclick="revealField(this, 'cert', ${c.id})">Ver</a>
-                <a class="lk" onclick="copySecret('${esc(c.cert ? c.cert.pw : '')}', '${esc(c.fan)} · Certificado')">Copiar</a>
+                <button class="discrete-action-btn" onclick="revealField(this, 'cert', ${c.id})" title="Revelar senha">👁</button>
+                <button class="discrete-action-btn copy" onclick="copySecret('${esc(c.cert ? c.cert.pw : '')}', '${esc(c.fan)} · Certificado')" title="Copiar senha">📋</button>
               ` : `<span class="mu s">[Protegido]</span>`}
             </div>
           </label>
@@ -1827,46 +2292,56 @@ function renderCompanyTabContent(tab, c, hs) {
     return `
       <div class="cd">
         <div class="hh">
-          <h2>4. Acessos e Credenciais</h2>
+          <h2>5. Credenciais e Acessos (Consulta Rápida)</h2>
           ${hasPerm("credentials_edit") ? `<button class="btn sm pr" onclick="openCredModal(null, ${c.id})">+ Adicionar credencial</button>` : ""}
         </div>
+        <p class="sub" style="margin-bottom:12px">Consulta direta de sistemas, links e senhas com cópia em 1 clique.</p>
         <table class="ed">
           <thead>
             <tr>
-              <th style="width:120px">Órgão</th>
+              <th style="width:110px">Categoria</th>
               <th>Sistema</th>
-              <th>Link</th>
-              <th>Usuário</th>
-              <th>Senha / Token</th>
-              <th style="width:110px">Situação</th>
+              <th>Link Direto</th>
+              <th>Usuário / Login</th>
+              <th>Senha</th>
+              <th style="width:90px">Situação</th>
               <th>Observações</th>
-              ${hasPerm("credentials_edit") ? "<th></th>" : ""}
+              <th style="width:70px;text-align:right">Ações</th>
             </tr>
           </thead>
           <tbody>
             ${(c.ac || []).map((a, k) => `
               <tr>
-                ${Cs(`ac.${k}.o`, OR)}
-                ${Ci(`ac.${k}.s`)}
+                <td>${Cs(`ac.${k}.o`, OR)}</td>
+                <td>${Ci(`ac.${k}.s`)}</td>
                 <td>
                   <div style="display:flex;align-items:center;gap:4px">
-                    <input data-p="ac.${k}.link" value="${esc(a.link || '')}" placeholder="https://..." ${!hasPerm("companies_edit") ? "disabled" : ""}>
-                    ${a.link ? `<a href="${esc(a.link)}" target="_blank" rel="noopener noreferrer" class="btn-icon-link" title="Abrir link em nova aba">↗</a>` : ''}
+                    <input data-p="ac.${k}.link" value="${esc(a.link || '')}" placeholder="https://...">
+                    ${a.link ? `<a href="${esc(a.link)}" target="_blank" rel="noopener noreferrer" class="btn-icon-link" title="Abrir sistema em nova aba">↗</a>` : ''}
                   </div>
                 </td>
-                ${Ci(`ac.${k}.u`)}
                 <td>
                   <div style="display:flex;align-items:center;gap:4px">
-                    <input type="password" data-p="ac.${k}.pw" value="${esc(a.pw || '')}" ${!hasPerm("credentials_edit") ? "disabled" : ""}>
+                    <input data-p="ac.${k}.u" value="${esc(a.u || '')}" placeholder="Login">
+                    ${a.u ? `<button class="discrete-action-btn copy" onclick="copyToClipboard('${esc(a.u)}', 'Usuário')" title="Copiar usuário">📋</button>` : ''}
+                  </div>
+                </td>
+                <td>
+                  <div style="display:flex;align-items:center;gap:4px">
+                    <input type="password" data-p="ac.${k}.pw" value="${esc(a.pw || '')}" style="width:90px">
                     ${hasPerm("credentials_reveal") ? `
-                      <a class="lk" onclick="revealField(this, 'acesso', ${c.id}, ${k})">Ver</a>
-                      <a class="lk" onclick="copySecret('${esc(a.pw || '')}', '${esc(c.fan)} · ${esc(a.s)}')">Copiar</a>
+                      <button class="discrete-action-btn" onclick="revealField(this, 'acesso', ${c.id}, ${k})" title="Revelar senha">👁</button>
+                      <button class="discrete-action-btn copy" onclick="copySecret('${esc(a.pw || '')}', '${esc(c.fan)} · ${esc(a.s)}')" title="Copiar senha">📋</button>
                     ` : `<span class="mu s">[Oculto]</span>`}
                   </div>
                 </td>
-                ${Cs(`ac.${k}.sit`, SIT)}
-                ${Ci(`ac.${k}.obs`)}
-                ${hasPerm("credentials_edit") ? `<td><span class="x" title="Remover" onclick="rm('ac',${k})">×</span></td>` : ""}
+                <td>${Cs(`ac.${k}.sit`, SIT)}</td>
+                <td>${Ci(`ac.${k}.obs`)}</td>
+                <td style="text-align:right">
+                  ${hasPerm("credentials_edit") ? `
+                    <button class="discrete-action-btn danger" onclick="rm('ac',${k})" title="Remover credencial">✕</button>
+                  ` : ''}
+                </td>
               </tr>
             `).join("")}
           </tbody>
@@ -1875,48 +2350,11 @@ function renderCompanyTabContent(tab, c, hs) {
     `;
   }
 
-  if (tab === "obrig") {
-    const ativas = (c.obrig && c.obrig.ativas) ? c.obrig.ativas : [];
-    return `
-      <div class="cd">
-        <div class="hh">
-          <h2>5. Obrigações e Configurações Fiscais</h2>
-        </div>
-        <div class="g2" style="align-items:flex-start">
-          <div>
-            <label style="font-weight:700;color:var(--tx);font-size:13px;display:block;margin-bottom:8px">Obrigações Contábeis & Fiscais da Empresa:</label>
-            <div class="tax-ob-grid">
-              ${DEFAULT_TAX_OBLIGATIONS.map(ob => {
-                const isChecked = ativas.includes(ob.id);
-                return `
-                  <div class="tax-ob-card">
-                    <label>
-                      <input type="checkbox" ${isChecked ? 'checked' : ''} ${!hasPerm("companies_edit") ? 'disabled' : ''} onchange="toggleCompanyObligation('${ob.id}', this.checked)">
-                      <span>${esc(ob.name)}</span>
-                    </label>
-                    <span class="tax-due">Prazo: ${esc(ob.period)}</span>
-                  </div>
-                `;
-              }).join("")}
-            </div>
-          </div>
-          <div>
-            ${S("obrig.apuracao", "Regime de Apuração", ["Competência", "Caixa"])}
-            <label class="fi" style="margin-top:14px">
-              <span>Notas e Orientações Fiscais</span>
-              <textarea data-p="obrig.notas" rows="6" ${!hasPerm("companies_edit") ? 'disabled' : ''}>${esc((c.obrig && c.obrig.notas) || '')}</textarea>
-            </label>
-          </div>
-        </div>
-      </div>
-    `;
-  }
-
   if (tab === "compl") {
     return `
       <div class="cd">
         <div class="hh">
-          <h2>6. Outros Dados e Informações Complementares</h2>
+          <h2>6. Informações Complementares</h2>
         </div>
         <div class="fl" style="max-width:900px">
           ${I("compl.faturamento_medio", "Faturamento médio mensal")}
@@ -1924,7 +2362,7 @@ function renderCompanyTabContent(tab, c, hs) {
           ${I("compl.contato_principal", "Contato principal no cliente", { w: 2 })}
           <label class="fi" style="grid-column:span 3">
             <span>Observações internas da contabilidade</span>
-            <textarea data-p="compl.obs_internas" rows="5" ${!hasPerm("companies_edit") ? 'disabled' : ''}>${esc((c.compl && c.compl.obs_internas) || '')}</textarea>
+            <textarea data-p="compl.obs_internas" rows="5">${esc((c.compl && c.compl.obs_internas) || '')}</textarea>
           </label>
         </div>
       </div>
@@ -1945,18 +2383,19 @@ function renderCompanyTabContent(tab, c, hs) {
   }
 }
 
-function toggleCompanyObligation(obId, isChecked) {
+function toggleCompanyDemand(demandName) {
   if (!D) return;
-  if (!D.obrig) D.obrig = { ativas: [], apuracao: "Competência", notas: "" };
-  if (!D.obrig.ativas) D.obrig.ativas = [];
-  if (isChecked) {
-    if (!D.obrig.ativas.includes(obId)) D.obrig.ativas.push(obId);
+  if (!Array.isArray(D.demandas)) D.demandas = [];
+  const idx = D.demandas.indexOf(demandName);
+  if (idx >= 0) {
+    D.demandas.splice(idx, 1);
   } else {
-    D.obrig.ativas = D.obrig.ativas.filter(x => x !== obId);
+    D.demandas.push(demandName);
   }
   dy = 1;
   const elDy = $("#dy");
   if (elDy) elDy.style.visibility = "visible";
+  fic();
 }
 
 async function queryCNPJFicha() {
@@ -1971,7 +2410,13 @@ async function queryCNPJFicha() {
     if (confirm(`Dados obtidos com sucesso para "${data.raz}". Deseja atualizar os dados cadastrais da empresa?`)) {
       D.raz = data.raz;
       D.fan = data.fan;
-      if (data.end) D.end = data.end;
+      if (data.end_logradouro) D.end_logradouro = data.end_logradouro;
+      if (data.end_numero) D.end_numero = data.end_numero;
+      if (data.end_complemento) D.end_complemento = data.end_complemento;
+      if (data.end_bairro) D.end_bairro = data.end_bairro;
+      if (data.end_cidade) D.end_cidade = data.end_cidade;
+      if (data.end_uf) D.end_uf = data.end_uf;
+      if (data.end_cep) D.end_cep = data.end_cep;
       if (data.nat) D.nat = data.nat;
       if (data.tel) D.tel = data.tel;
       if (data.mail) D.mail = data.mail;
@@ -1996,7 +2441,7 @@ function revealField(el, type, compId, index) {
   const input = el.parentElement.querySelector("input");
   const isPass = input.type === "password";
   input.type = isPass ? "text" : "password";
-  el.textContent = isPass ? "Ocultar" : "Ver";
+  el.textContent = isPass ? "🔒" : "👁";
 
   if (isPass) {
     const sysName = type === "cert" ? "Certificado Digital" : (comp && comp.ac && comp.ac[index] ? comp.ac[index].s : "Acesso");
@@ -2013,7 +2458,7 @@ function copySecret(val, targetLabel) {
     recordAudit("copy", "Copiou senha", "credential", targetLabel, "Senha/token copiado para área de transferência");
     toast("Copiado com sucesso!");
   }).catch(() => {
-    toast("Falha ao copiar automaticamente. Tente selecionar o texto.");
+    toast("Falha ao copiar automaticamente.");
   });
 }
 
@@ -2052,8 +2497,8 @@ function sv() {
     return;
   }
   D.fan = (D.fan || "").trim() || D.raz.trim();
+  ensureCompanyAddressFields(D);
 
-  // Salva por ID de forma robusta e garantida (sem o bug de indexOf)
   const idx = C.findIndex(c => String(c.id) === String(D.id));
   if (idx >= 0) {
     C[idx] = structuredClone(D);
@@ -2072,9 +2517,9 @@ function sv() {
 }
 
 /* ==========================================================================
-   7. LISTA DE EMPRESAS (REQUISITO 3 - SEM RESPONSÁVEL)
+   7. LISTA DE EMPRESAS (FILTRO POR STATUS DO CLIENTE)
    ========================================================================== */
-const F = { q: "", seg: "", reg: "", st: "", pend: false };
+const F = { q: "", seg: "", reg: "", status_cliente: "", pend: false };
 
 function lst() {
   $("#v").innerHTML = `
@@ -2094,20 +2539,25 @@ function lst() {
     ` : ""}
 
     <div class="fb">
-      <input placeholder="Filtrar por nome ou CNPJ" value="${esc(F.q)}" oninput="F.q=this.value;fl()">
+      <input placeholder="Filtrar por nome, CNPJ ou cidade" value="${esc(F.q)}" oninput="F.q=this.value;fl()">
+      
+      <!-- Filtro de Status do Cliente -->
+      <select onchange="F.status_cliente=this.value;fl()">
+        <option value="">Todos os status</option>
+        ${STATUS_CLIENTE_OPTS.map(st => `<option value="${esc(st)}" ${F.status_cliente === st ? 'selected' : ''}>Status: ${esc(st)}</option>`).join("")}
+      </select>
+
       <select onchange="F.seg=this.value;fl()">
         <option value="">Todos os segmentos</option>
         ${SEGMENTS.map(s => `<option value="${esc(s)}" ${F.seg === s ? 'selected' : ''}>${esc(s)}</option>`).join("")}
       </select>
+
       <select onchange="F.reg=this.value;fl()">
         <option value="">Todos os regimes</option>
         ${REG.map(r => `<option value="${esc(r)}" ${F.reg === r ? 'selected' : ''}>${esc(r)}</option>`).join("")}
       </select>
-      <select onchange="F.st=this.value;fl()">
-        <option value="">Todos os status</option>
-        ${STS.map(st => `<option value="${esc(st)}" ${F.st === st ? 'selected' : ''}>${esc(st)}</option>`).join("")}
-      </select>
-      ${F.st || F.seg || F.reg || F.q || F.pend ? `<button class="btn sm" onclick="F={q:'',seg:'',reg:'',st:'',pend:false};lst()">Limpar Filtros</button>` : ""}
+
+      ${F.status_cliente || F.seg || F.reg || F.q || F.pend ? `<button class="btn sm" onclick="F={q:'',seg:'',reg:'',status_cliente:'',pend:false};lst()">Limpar Filtros</button>` : ""}
     </div>
 
     <div class="cd t">
@@ -2118,8 +2568,8 @@ function lst() {
             <th>CNPJ</th>
             <th>Segmento</th>
             <th>Regime</th>
-            <th>Status</th>
-            <th>Início</th>
+            <th>Status do Cliente</th>
+            <th>Cidade/UF</th>
             <th>Certificado</th>
             ${F.pend ? `<th>Pendências Específicas</th>` : ""}
           </tr>
@@ -2133,24 +2583,28 @@ function lst() {
 
 function fl() {
   const q = F.q.toLowerCase();
-  let r = C.filter(c =>
-    (!q || (c.fan + c.raz + (c.cnpj || "")).toLowerCase().includes(q)) &&
-    (!F.seg || c.seg === F.seg) &&
-    (!F.reg || c.reg === F.reg) &&
-    (!F.st || c.st === F.st) &&
-    (!F.pend || miss(c).length > 0)
-  );
+  let r = C.filter(c => {
+    ensureCompanyAddressFields(c);
+    const searchTarget = (c.fan + c.raz + (c.cnpj || "") + (c.end_cidade || "")).toLowerCase();
+    const matchQ = !q || searchTarget.includes(q);
+    const matchSeg = !F.seg || c.seg === F.seg;
+    const matchReg = !F.reg || c.reg === F.reg;
+    const matchStatus = !F.status_cliente || (c.status_cliente || "Ativo") === F.status_cliente;
+    const matchPend = !F.pend || miss(c).length > 0;
+    return matchQ && matchSeg && matchReg && matchStatus && matchPend;
+  });
 
   $("#tb").innerHTML = r.length ? r.map(c => {
     const m = miss(c);
+    const loc = (c.end_cidade && c.end_uf) ? `${c.end_cidade}/${c.end_uf}` : (c.end_cidade || c.end_uf || "—");
     return `
       <tr class="rw" onclick="location.hash='empresa-${c.id}'">
         <td><b>${esc(c.fan)}</b><br><span class="s mu">${esc(c.raz)}</span></td>
         <td>${esc(c.cnpj || "—")}</td>
         <td>${esc(c.seg || "—")}</td>
         <td>${esc(c.reg || "—")}</td>
-        <td>${stP(c)}</td>
-        <td>${c.ini ? c.ini.slice(5) + "/" + c.ini.slice(0, 4) : "—"}</td>
+        <td>${statusClienteBadge(c.status_cliente)}</td>
+        <td>${esc(loc)}</td>
         <td>${cp(c)}</td>
         ${F.pend ? `<td><span class="p wn s" title="${esc(m.join(', '))}">Falta: ${esc(m.slice(0, 2).join(', '))}${m.length > 2 ? ` +${m.length - 2}` : ""}</span></td>` : ""}
       </tr>
@@ -2161,11 +2615,11 @@ function fl() {
 }
 
 /* ==========================================================================
-   8. DASHBOARD (CARDS CLICÁVEIS + INDICADORES DE CERTIFICADOS AVULSOS)
+   8. DASHBOARD SIMPLIFICADO E REAL (REQUISITO 3.4)
    ========================================================================== */
 function dashFilter(tipo) {
   if (tipo === "empresas_ativas") {
-    F.st = "Ativa";
+    F.status_cliente = "Ativo";
     F.seg = ""; F.reg = ""; F.q = ""; F.pend = false;
     location.hash = "empresas";
   } else if (tipo === "cert_vencer") {
@@ -2176,7 +2630,7 @@ function dashFilter(tipo) {
     location.hash = "certificados";
   } else if (tipo === "pendencias") {
     F.pend = true;
-    F.st = ""; F.seg = ""; F.reg = ""; F.q = "";
+    F.status_cliente = ""; F.seg = ""; F.reg = ""; F.q = "";
     location.hash = "empresas";
   } else if (tipo === "cert_avulsos") {
     SCF = { q: "", tipo: "", sit: "" };
@@ -2186,13 +2640,13 @@ function dashFilter(tipo) {
 
 function dash() {
   const n = C.length;
-  const ativas = C.filter(c => c.st === "Ativa").length;
+  const ativas = C.filter(c => (c.status_cliente || "Ativo") === "Ativo").length;
+  const suspensas = C.filter(c => c.status_cliente === "Suspenso").length;
   const pe = C.filter(c => miss(c).length);
   const at = C.filter(c => ["wn", "er"].includes(cs(c))).sort((a, b) => dd(a) - dd(b));
   const vencers = at.filter(c => cs(c) === "wn").length;
   const vencidos = at.filter(c => cs(c) === "er").length;
 
-  // Estatísticas de Certificados Avulsos
   const scTotal = SINGLE_CERTS.length;
   const scToVencer = SINGLE_CERTS.filter(x => scStatus(x) === "wn").length;
   const scVencidos = SINGLE_CERTS.filter(x => scStatus(x) === "er").length;
@@ -2230,21 +2684,21 @@ function dash() {
     <div class="g g4">
       <div class="cd kp cl" onclick="dashFilter('empresas_ativas')" title="Clique para abrir empresas ativas">
         <span class="kp-hint">Ver ativas →</span>
-        <span class="mu">Empresas cadastradas</span>
+        <span class="mu">Empresas Cadastradas</span>
         <b>${n}</b>
-        <span class="s ok">${ativas} ativas no sistema</span>
+        <span class="s ok">${ativas} ativas ${suspensas ? `· ${suspensas} suspensas` : ''}</span>
       </div>
 
       <div class="cd kp cl" onclick="dashFilter('cert_vencer')" title="Clique para filtrar certificados a vencer nos próximos 60 dias">
         <span class="kp-hint">Filtrar lista →</span>
-        <span class="mu">Certificados a vencer</span>
+        <span class="mu">Certificados a Vencer</span>
         <b class="wn">${vencers}</b>
         <span class="s wn">nos próximos 60 dias (Empresas)</span>
       </div>
 
       <div class="cd kp cl" onclick="dashFilter('cert_vencidos')" title="Clique para filtrar certificados vencidos">
         <span class="kp-hint">Ver vencidos →</span>
-        <span class="mu">Certificados vencidos</span>
+        <span class="mu">Certificados Vencidos</span>
         <b class="er">${vencidos}</b>
         <span class="s er">exigem renovação imediata</span>
       </div>
@@ -2318,7 +2772,7 @@ function dash() {
 }
 
 /* ==========================================================================
-   9. GESTÃO DE CERTIFICADOS DIGITAIS (EMPRESAS RECORRENTES - REQUISITO 5)
+   9. GESTÃO DE CERTIFICADOS DIGITAIS (EMPRESAS RECORRENTES)
    ========================================================================== */
 let CF = "";
 function certs() {
@@ -2381,8 +2835,8 @@ function certs() {
                 <div style="display:flex;align-items:center;gap:4px">
                   <input type="password" readonly value="${esc(c.cert ? c.cert.pw : '')}" style="width:100px;padding:3px 6px;font-size:12px;background:var(--bg)">
                   ${hasPerm("credentials_reveal") ? `
-                    <a class="lk" onclick="revealField(this, 'cert', ${c.id})">Ver</a>
-                    <a class="lk" onclick="copySecret('${esc(c.cert ? c.cert.pw : '')}', '${esc(c.fan)} · Certificado')">Copiar</a>
+                    <button class="discrete-action-btn" onclick="revealField(this, 'cert', ${c.id})" title="Revelar senha">👁</button>
+                    <button class="discrete-action-btn copy" onclick="copySecret('${esc(c.cert ? c.cert.pw : '')}', '${esc(c.fan)} · Certificado')" title="Copiar senha">📋</button>
                   ` : `<span class="mu s">[Oculto]</span>`}
                 </div>
               </td>
@@ -2534,7 +2988,7 @@ function usersView() {
   }
 
   $("#v").innerHTML = `
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:gap:10px">
       <div>
         <h1>Usuários e Convites</h1>
         <p class="sub" style="margin-bottom:0">Gerencie colaboradores, convites exclusivos e permissões individuais.</p>
@@ -3102,7 +3556,7 @@ function go() {
     }
     cur = 0; orig = null;
     initWizard();
-    scrollTo(0, 0);
+    if (typeof window !== "undefined" && typeof window.scrollTo === "function") window.scrollTo(0, 0);
     renderWizard();
   }
   else if (m === "empresa" && nm(a)) {
@@ -3111,34 +3565,35 @@ function go() {
       location.hash = "dashboard";
       return;
     }
-    if (cur != a) { cur = a; scrollTo(0, 0); }
+    if (cur != a) { cur = a; if (typeof window !== "undefined" && typeof window.scrollTo === "function") window.scrollTo(0, 0); }
     orig = nm(a);
+    ensureCompanyAddressFields(orig);
     D = structuredClone(orig);
     currentCompanyTab = "dados";
     fic();
   }
   else if (h === "certificados-avulsos") {
-    scrollTo(0, 0);
+    if (typeof window !== "undefined" && typeof window.scrollTo === "function") window.scrollTo(0, 0);
     singleCertsView();
   }
   else if (m === "usuarios") {
-    scrollTo(0, 0);
+    if (typeof window !== "undefined" && typeof window.scrollTo === "function") window.scrollTo(0, 0);
     usersView();
   }
   else if (m === "auditoria") {
-    scrollTo(0, 0);
+    if (typeof window !== "undefined" && typeof window.scrollTo === "function") window.scrollTo(0, 0);
     auditView();
   }
   else if (m === "certificados") {
-    scrollTo(0, 0);
+    if (typeof window !== "undefined" && typeof window.scrollTo === "function") window.scrollTo(0, 0);
     certs();
   }
   else if (m === "empresas") {
-    scrollTo(0, 0);
+    if (typeof window !== "undefined" && typeof window.scrollTo === "function") window.scrollTo(0, 0);
     lst();
   }
   else {
-    cur = 0; D = null; scrollTo(0, 0);
+    cur = 0; D = null; if (typeof window !== "undefined" && typeof window.scrollTo === "function") window.scrollTo(0, 0);
     dash();
   }
 }
@@ -3149,7 +3604,7 @@ const qInput = $("#q"), srBox = $("#sr");
 if (qInput && srBox) {
   qInput.oninput = () => {
     const t = qInput.value.trim().toLowerCase();
-    const r = t.length < 2 ? [] : C.filter(c => (c.raz + c.fan + (c.cnpj || "")).toLowerCase().includes(t)).slice(0, 6);
+    const r = t.length < 2 ? [] : C.filter(c => (c.raz + c.fan + (c.cnpj || "") + (c.end_cidade || "")).toLowerCase().includes(t)).slice(0, 6);
     srBox.style.display = r.length ? "block" : "none";
     srBox.innerHTML = r.map(c => `
       <div onmousedown="location.hash='empresa-${c.id}';qInput.value=''">
@@ -3164,18 +3619,20 @@ if (qInput && srBox) {
 Object.assign(window, {
   toggleMobileMenu, openChangePasswordModal, submitChangePassword, openResetUserPasswordModal, submitResetUserPassword,
   encryptVaultSecret, decryptVaultSecret, hashPassword,
-  F, C, USERS, INVITES, AUDIT_LOGS, CURRENT_USER, SEGMENTS, SINGLE_CERTS,
+  F, C, USERS, INVITES, AUDIT_LOGS, CURRENT_USER, SEGMENTS, DEMANDS, SINGLE_CERTS,
   th, logout, handleLogin, submitAccountActivation,
-  dashFilter, dash, lst, fl, fic, add, rm, dc, sv, revealField, copySecret,
+  dashFilter, dash, lst, fl, fic, add, rm, dc, sv, revealField, copySecret, copyToClipboard,
   certs,
   usersView, openInviteModal, onInviteRoleChange, submitInvite, copyInviteLink, copyInviteLinkByToken, cancelInvite, openEditPermsModal, saveUserPerms, toggleUserStatus,
   auditView, exportAudit, closeModal, go,
-  openAddSegmentModal, submitNewSegment, saveSegments,
+  openManageSegmentsModal, submitNewSegment, editSegmentPrompt, deleteSegmentCheck, saveSegments,
+  openManageDemandsModal, submitNewDemand, editDemandPrompt, deleteDemandCheck, saveDemands,
   openSingleCertModal, saveSingleCert, deleteSingleCert, singleCertsView, toggleSingleCertModalPwd, revealSingleCertPwd,
   saveSingleCerts, scDays, scStatus, scLabel, scWidth, saveCompanies,
   saveCred, openCredModal,
-  goToWizardStep, saveWizardDraft, discardWizardDraft, addWizardRow, removeWizardRow, toggleWizardObligation, submitFinishWizard, handleCNPJLookupWizard, autoSuggestPortalLink, toggleInputVisibility,
-  switchCompanyTab, queryCNPJFicha, toggleCompanyObligation
+  goToWizardStep, saveWizardDraft, discardWizardDraft, addWizardRow, removeWizardRow, submitFinishWizard, handleCNPJLookupWizard, handleCEPLookupWizard, autoSuggestPortalLink, toggleInputVisibility,
+  switchCompanyTab, queryCNPJFicha, toggleWizardDemand, toggleCompanyDemand, updateCompanyStatusDirect,
+  formatFullAddress, formatCPFCNPJ, formatCEP, isValidCNPJ, formatCNPJ
 });
 
 // Inicialização da aplicação

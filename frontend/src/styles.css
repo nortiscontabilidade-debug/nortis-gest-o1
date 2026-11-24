@@ -519,3 +519,184 @@ tbody tr.rw:hover { background: var(--hv); }
   #v { padding: 16px 14px; }
   .g4, .g3, .g2x, .fl { grid-template-columns: 1fr; }
 }
+
+/* ==========================================================================
+   WIZARD DE CADASTRO POR ETAPAS (NOVA EMPRESA)
+   ========================================================================== */
+.wizard-stepper {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+  margin: 18px 0 24px;
+}
+@media (max-width: 1100px) {
+  .wizard-stepper {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+@media (max-width: 650px) {
+  .wizard-stepper {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+.wizard-step-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  background: var(--cd);
+  border: 1px solid var(--bd);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all .15s ease;
+  position: relative;
+  user-select: none;
+}
+.wizard-step-item:hover {
+  border-color: var(--pr);
+  background: var(--hv);
+}
+.wizard-step-item.active {
+  border-color: var(--pr);
+  background: rgba(8, 183, 133, .08);
+  box-shadow: 0 0 0 1px var(--pr);
+}
+.wizard-step-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+.wizard-step-num {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 800;
+  background: var(--hv);
+  color: var(--tx);
+  border: 1px solid var(--bd);
+}
+.wizard-step-item.active .wizard-step-num {
+  background: var(--pr);
+  color: var(--on);
+  border-color: var(--pr);
+}
+.wizard-step-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--tx);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wizard-step-status {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 6px;
+  border-radius: 99px;
+  text-transform: uppercase;
+  letter-spacing: .03em;
+  width: fit-content;
+}
+.wizard-step-status.done {
+  background: rgba(47, 203, 143, .16);
+  color: var(--ok);
+}
+.wizard-step-status.pend {
+  background: rgba(227, 169, 59, .14);
+  color: var(--wn);
+}
+.wizard-step-status.curr {
+  background: rgba(8, 183, 133, .2);
+  color: var(--pr);
+}
+
+.wizard-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 24px;
+  padding-top: 18px;
+  border-top: 1px solid var(--bd);
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.wizard-draft-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--mu);
+}
+
+.input-with-action {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  width: 100%;
+}
+.input-with-action input,
+.input-with-action select {
+  flex: 1;
+}
+
+.btn-icon-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  border: 1px solid var(--bd);
+  background: var(--cd);
+  color: var(--pr);
+  text-decoration: none;
+  font-size: 12px;
+  flex-shrink: 0;
+  transition: all .15s;
+}
+.btn-icon-link:hover {
+  background: var(--pr);
+  color: var(--on);
+  border-color: var(--pr);
+}
+
+.tax-ob-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+.tax-ob-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--bd);
+  background: rgba(255, 255, 255, .02);
+  transition: border-color .15s;
+}
+.tax-ob-card:hover {
+  border-color: var(--pr);
+}
+.tax-ob-card label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 13px;
+  cursor: pointer;
+}
+.tax-ob-card input[type="checkbox"] {
+  cursor: pointer;
+}
+.tax-ob-card .tax-due {
+  font-size: 11px;
+  color: var(--mu);
+}
